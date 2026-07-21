@@ -31,7 +31,23 @@ export GLM_API_KEY="..."
 export GLM_BASE_URL="https://open.bigmodel.cn/api/paas/v4"
 export GLM_MODEL="glm-5.2"
 export TELOXIDE_TOKEN="..."
+export DAILY_AGENT_LOCALE="zh-CN"
 ```
+
+界面和 GLM 输出语言在 `.env` 中固定配置，只支持 `zh-CN` 和 `en-US`：
+
+```bash
+DAILY_AGENT_LOCALE=zh-CN
+DAILY_AGENT_RESOURCES=./resources
+```
+
+英文部署改为：
+
+```bash
+DAILY_AGENT_LOCALE=en-US
+```
+
+修改语言后需要重启 Terminal 或 Telegram gateway。用户不能通过命令动态切换语言。界面文案位于 `resources/locales/`，GLM system prompts 位于 `resources/prompts/`；修改这些资源不需要修改 Rust 源码。
 
 构建：
 

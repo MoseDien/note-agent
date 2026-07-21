@@ -15,15 +15,15 @@ pub async fn add_log(
     channel: &str,
     privacy_level: &str,
 ) -> Result<AddResult> {
-    anyhow::ensure!(!text.trim().is_empty(), "日志内容不能为空");
+    anyhow::ensure!(!text.trim().is_empty(), config.i18n.text("error.empty_log"));
     anyhow::ensure!(
         matches!(privacy_level, "normal" | "no_upload"),
-        "无效隐私级别"
+        config.i18n.text("error.invalid_privacy")
     );
     let mut log = store
         .insert_log(user_id, channel, text.trim(), privacy_level)
         .await?;
-    let redacted = privacy::redact(text.trim());
+    let redacted = privacy::redact(text.trim(), &config.i18n);
     let mut found_connections = vec![];
     if privacy_level == "no_upload" {
         return Ok(AddResult {
@@ -46,8 +46,8 @@ pub async fn add_log(
                     .search_candidates(user_id, &query, Some(&log.id), 5)
                     .await?;
                 if !candidates.is_empty() {
-                    let mut context = vec![log_for_model(&log)];
-                    context.extend(candidates.iter().map(log_for_model));
+                    let mut context = vec![log_for_model(&log, config)];
+                    context.extend(candidates.iter().map(|log| log_for_model(log, config)));
                     match client.connections(&serde_json::to_string(&context)?).await {
                         Ok(result) => {
                             let valid_ids: std::collections::HashSet<&str> = context
@@ -100,11 +100,12 @@ pub async fn connections(
     let logs = store.recent_logs(user_id, limit).await?;
     if logs.len() < 2 {
         return Ok(ConnectionAnalysis {
-            overview: "至少需要两条记录才能分析联系。".into(),
+            overview: config.i18n.text("analysis.need_two_logs"),
             connections: vec![],
         });
     }
-    let input_logs: Vec<serde_json::Value> = logs.iter().map(log_for_model).collect();
+    let input_logs: Vec<serde_json::Value> =
+        logs.iter().map(|log| log_for_model(log, config)).collect();
     let result = GlmClient::from_config(config)?
         .connections(&serde_json::to_string(&input_logs)?)
         .await?;
@@ -123,22 +124,22 @@ pub async fn connections(
     Ok(validated)
 }
 
-fn log_for_model(log: &Log) -> serde_json::Value {
+fn log_for_model(log: &Log, config: &Config) -> serde_json::Value {
     serde_json::json!({
         "id": log.id,
         "created_at": log.created_at,
         "category": log.category,
-        "summary": log.summary.as_deref().map(privacy::redact),
+        "summary": log.summary.as_deref().map(|value| privacy::redact(value, &config.i18n)),
         "topics": log.topics_json
     })
 }
 
-pub fn format_log(log: &Log) -> String {
+pub fn format_log(log: &Log, config: &Config) -> String {
     format!(
         "[{}] {} · {}\n{}",
         log.id,
         log.created_at,
-        log.category.as_deref().unwrap_or("待分析"),
+        config.i18n.category(log.category.as_deref()),
         log.summary.as_deref().unwrap_or(&log.text)
     )
 }

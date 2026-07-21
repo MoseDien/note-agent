@@ -2,8 +2,10 @@ mod agent;
 mod config;
 mod db;
 mod glm;
+mod i18n;
 mod models;
 mod privacy;
+mod prompts;
 mod telegram;
 
 use anyhow::{Context, Result};
@@ -105,7 +107,7 @@ async fn main() -> Result<()> {
                     "[{}] {} · {}\n{}\n",
                     log.id,
                     log.created_at,
-                    log.category.as_deref().unwrap_or("待分析"),
+                    config.i18n.category(log.category.as_deref()),
                     log.summary.as_deref().unwrap_or(&log.text)
                 );
             }
@@ -115,22 +117,38 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Some(Command::Delete { id }) => {
-            anyhow::ensure!(store.delete_log(&user.id, &id).await?, "没有找到该记录");
-            println!("已删除 {id}");
+            anyhow::ensure!(
+                store.delete_log(&user.id, &id).await?,
+                config.i18n.text("terminal.log_not_found")
+            );
+            println!("{}", config.i18n.format("terminal.deleted", &[("id", &id)]));
         }
         Some(Command::Export { output }) => {
             let json = serde_json::to_string_pretty(&store.export_user(&user.id).await?)?;
             if let Some(path) = output {
-                std::fs::write(&path, json)
-                    .with_context(|| format!("无法写入 {}", path.display()))?;
-                println!("已导出到 {}", path.display());
+                std::fs::write(&path, json).with_context(|| {
+                    config.i18n.format(
+                        "terminal.write_failed",
+                        &[("path", &path.display().to_string())],
+                    )
+                })?;
+                println!(
+                    "{}",
+                    config.i18n.format(
+                        "terminal.exported",
+                        &[("path", &path.display().to_string())]
+                    )
+                );
             } else {
                 println!("{json}");
             }
         }
         Some(Command::LinkTelegram) => {
             let code = store.create_pairing_code(&user.id).await?;
-            println!("在 Telegram 中发送 /link {code}\n配对码 10 分钟内有效且只能使用一次。");
+            println!(
+                "{}",
+                config.i18n.format("terminal.link", &[("code", &code)])
+            );
         }
         Some(Command::Gateway) => unreachable!(),
     }
@@ -139,7 +157,7 @@ async fn main() -> Result<()> {
 
 async fn interactive(store: &Store, config: &config::Config, user_id: &str) -> Result<()> {
     use std::io::Write;
-    println!("Daily Agent · 输入日志；/recent 查看记录；/connections 分析联系；/exit 退出");
+    println!("{}", config.i18n.text("interactive.welcome"));
     loop {
         print!("> ");
         std::io::stdout().flush()?;
@@ -153,7 +171,7 @@ async fn interactive(store: &Store, config: &config::Config, user_id: &str) -> R
             "/exit" | "/quit" => break,
             "/recent" => {
                 for log in store.recent_logs(user_id, 10).await? {
-                    println!("{}\n", agent::format_log(&log));
+                    println!("{}\n", agent::format_log(&log, config));
                 }
             }
             "/connections" => println!(

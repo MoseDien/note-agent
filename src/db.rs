@@ -35,6 +35,23 @@ impl Store {
         ] {
             sqlx::query(sql).execute(&self.pool).await?;
         }
+        for (legacy, code) in [
+            ("工作", "work"),
+            ("学习", "study"),
+            ("健康", "health"),
+            ("关系", "relationships"),
+            ("财务", "finance"),
+            ("灵感", "inspiration"),
+            ("情绪", "emotions"),
+            ("生活", "life"),
+            ("其他", "other"),
+        ] {
+            sqlx::query("UPDATE logs SET category=? WHERE category=?")
+                .bind(code)
+                .bind(legacy)
+                .execute(&self.pool)
+                .await?;
+        }
         Ok(())
     }
 
@@ -240,7 +257,7 @@ impl Store {
         .bind(Utc::now().to_rfc3339())
         .fetch_optional(&mut *tx)
         .await?
-        .context("配对码无效或已过期")?;
+        .context("pairing code is invalid or expired")?;
         sqlx::query("INSERT OR REPLACE INTO channel_identities(user_id,channel,external_id) VALUES(?,'telegram',?)").bind(&user_id).bind(telegram_id.to_string()).execute(&mut *tx).await?;
         sqlx::query("UPDATE pairing_codes SET used_at=? WHERE code=?")
             .bind(Utc::now().to_rfc3339())

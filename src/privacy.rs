@@ -1,3 +1,4 @@
+use crate::i18n::I18n;
 use regex::{Captures, Regex};
 use std::sync::LazyLock;
 
@@ -11,18 +12,18 @@ static BANK_CARD: LazyLock<Regex> =
 static IPV4: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").unwrap());
 
-pub fn redact(input: &str) -> String {
+pub fn redact(input: &str, i18n: &I18n) -> String {
     let rules = [
-        (&*EMAIL, "[邮箱]"),
-        (&*PHONE, "[手机号]"),
-        (&*ID_CARD, "[身份证号]"),
-        (&*BANK_CARD, "[银行卡号]"),
-        (&*IPV4, "[IP地址]"),
+        (&*EMAIL, i18n.text("pii.email")),
+        (&*PHONE, i18n.text("pii.phone")),
+        (&*ID_CARD, i18n.text("pii.id_card")),
+        (&*BANK_CARD, i18n.text("pii.bank_card")),
+        (&*IPV4, i18n.text("pii.ip")),
     ];
     rules
         .into_iter()
         .fold(input.to_owned(), |text, (re, replacement)| {
-            re.replace_all(&text, |_: &Captures| replacement)
+            re.replace_all(&text, |_: &Captures| replacement.as_str())
                 .into_owned()
         })
 }
@@ -32,7 +33,8 @@ mod tests {
     use super::*;
     #[test]
     fn redacts_common_pii() {
-        let output = redact("电话 13812345678，邮箱 a@example.com，IP 10.0.0.1");
+        let i18n = I18n::load("./resources", "zh-CN").unwrap();
+        let output = redact("电话 13812345678，邮箱 a@example.com，IP 10.0.0.1", &i18n);
         assert!(!output.contains("13812345678"));
         assert!(!output.contains("a@example.com"));
         assert!(!output.contains("10.0.0.1"));
