@@ -156,6 +156,7 @@ impl Store {
         Ok(())
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn mark_analysis_failed(&self, log_id: &str) -> Result<()> {
         sqlx::query("UPDATE logs SET analysis_status='failed' WHERE id=?")
             .bind(log_id)
@@ -182,6 +183,7 @@ impl Store {
         self.recent_logs(user_id, 100_000).await
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn search_candidates(
         &self,
         user_id: &str,

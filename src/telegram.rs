@@ -167,11 +167,7 @@ async fn handle(
 
 fn add_response(result: &AddResult, config: &Config) -> String {
     let mut status = if result.log.analysis_status == "complete" {
-        format!(
-            "{}\n{}",
-            config.i18n.category(result.log.category.as_deref()),
-            result.log.summary.as_deref().unwrap_or("")
-        )
+        config.i18n.category(result.log.category.as_deref())
     } else if result.log.analysis_status == "not_requested" {
         config.i18n.text("telegram.private_saved")
     } else {
@@ -191,10 +187,10 @@ fn add_response(result: &AddResult, config: &Config) -> String {
                 .join("\n"),
         );
     }
-    config.i18n.format(
-        "telegram.saved",
-        &[("id", &result.log.id), ("status", &status)],
-    )
+    let short_id: String = result.log.id.chars().take(4).collect();
+    config
+        .i18n
+        .format("telegram.saved", &[("id", &short_id), ("status", &status)])
 }
 
 fn truncate(value: &str, config: &Config) -> String {

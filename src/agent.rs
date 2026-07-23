@@ -2,7 +2,7 @@ use crate::{
     config::Config,
     db::Store,
     glm::GlmClient,
-    models::{AddResult, ConnectionAnalysis, IngestResult, Log, StorageAction},
+    models::{AddResult, Analysis, ConnectionAnalysis, IngestResult, Log, StorageAction},
     privacy,
     storage::StorageGate,
 };
@@ -17,20 +17,40 @@ pub async fn ingest_log(
     channel: &str,
 ) -> Result<IngestResult> {
     anyhow::ensure!(!text.trim().is_empty(), config.i18n.text("error.empty_log"));
-    let decision = storage_gate.decide(text.trim()).await?;
+    let decision = match storage_gate.decide(text.trim()).await {
+        Ok(decision) => decision,
+        Err(error) => {
+            tracing::warn!(error=%error, "local classification failed");
+            return Ok(IngestResult::Ask {
+                confidence: 0.0,
+                reason_code: "local_model_unavailable".into(),
+            });
+        }
+    };
     Ok(match decision.action {
         StorageAction::Store => IngestResult::Stored {
-            analysis: Box::new(add_log(store, config, user_id, text, channel, "normal").await?),
-            store_score: decision.store_score,
-            ignore_score: decision.ignore_score,
+            analysis: Box::new(
+                save_log(
+                    store,
+                    config,
+                    user_id,
+                    text,
+                    channel,
+                    "normal",
+                    Some(&decision.analysis),
+                )
+                .await?,
+            ),
+            confidence: decision.confidence,
+            reason_code: decision.reason_code,
         },
         StorageAction::Ignore => IngestResult::Ignored {
-            store_score: decision.store_score,
-            ignore_score: decision.ignore_score,
+            confidence: decision.confidence,
+            reason_code: decision.reason_code,
         },
         StorageAction::Ask => IngestResult::Ask {
-            store_score: decision.store_score,
-            ignore_score: decision.ignore_score,
+            confidence: decision.confidence,
+            reason_code: decision.reason_code,
         },
     })
 }
@@ -43,6 +63,39 @@ pub async fn add_log(
     channel: &str,
     privacy_level: &str,
 ) -> Result<AddResult> {
+    let local = StorageGate::from_config(config).await?;
+    let analysis = if privacy_level == "no_upload" {
+        None
+    } else {
+        match local.decide(text.trim()).await {
+            Ok(decision) => Some(decision.analysis),
+            Err(error) => {
+                tracing::warn!(error=%error, "forced log saved without local analysis");
+                None
+            }
+        }
+    };
+    save_log(
+        store,
+        config,
+        user_id,
+        text,
+        channel,
+        privacy_level,
+        analysis.as_ref(),
+    )
+    .await
+}
+
+async fn save_log(
+    store: &Store,
+    config: &Config,
+    user_id: &str,
+    text: &str,
+    channel: &str,
+    privacy_level: &str,
+    analysis: Option<&Analysis>,
+) -> Result<AddResult> {
     anyhow::ensure!(!text.trim().is_empty(), config.i18n.text("error.empty_log"));
     anyhow::ensure!(
         matches!(privacy_level, "normal" | "no_upload"),
@@ -52,70 +105,14 @@ pub async fn add_log(
         .insert_log(user_id, channel, text.trim(), privacy_level)
         .await?;
     let redacted = privacy::redact(text.trim(), &config.i18n);
-    let mut found_connections = vec![];
-    if privacy_level == "no_upload" {
-        return Ok(AddResult {
-            log,
-            redacted_preview: redacted,
-            connections: found_connections,
-        });
-    }
-    match GlmClient::from_config(config) {
-        Ok(client) => match client.analyze(&redacted).await {
-            Ok(analysis) => {
-                store.save_analysis(&log.id, &analysis).await?;
-                log = store.get_log(&log.id).await?;
-                let query = if analysis.topics.is_empty() {
-                    redacted.clone()
-                } else {
-                    analysis.topics.join(" ")
-                };
-                let candidates = store
-                    .search_candidates(user_id, &query, Some(&log.id), 5)
-                    .await?;
-                if !candidates.is_empty() {
-                    let mut context = vec![log_for_model(&log, config)];
-                    context.extend(candidates.iter().map(|log| log_for_model(log, config)));
-                    match client.connections(&serde_json::to_string(&context)?).await {
-                        Ok(result) => {
-                            let valid_ids: std::collections::HashSet<&str> = context
-                                .iter()
-                                .filter_map(|item| item["id"].as_str())
-                                .collect();
-                            found_connections = result
-                                .connections
-                                .into_iter()
-                                .filter(|connection| {
-                                    connection.source_log_ids.len() >= 2
-                                        && connection
-                                            .source_log_ids
-                                            .iter()
-                                            .all(|id| valid_ids.contains(id.as_str()))
-                                        && (0.0..=1.0).contains(&connection.confidence)
-                                })
-                                .collect();
-                            store.save_connections(user_id, &found_connections).await?;
-                        }
-                        Err(error) => {
-                            tracing::warn!(log_id=%log.id, error=%error, "GLM connection analysis failed")
-                        }
-                    }
-                }
-            }
-            Err(error) => {
-                tracing::warn!(log_id=%log.id, error=%error, "GLM analysis failed; original log retained");
-                store.mark_analysis_failed(&log.id).await?;
-                log.analysis_status = "failed".into();
-            }
-        },
-        Err(_) => {
-            tracing::info!(log_id=%log.id, "GLM is not configured; original log retained as pending")
-        }
+    if let Some(analysis) = analysis {
+        store.save_analysis(&log.id, analysis).await?;
+        log = store.get_log(&log.id).await?;
     }
     Ok(AddResult {
         log,
         redacted_preview: redacted,
-        connections: found_connections,
+        connections: vec![],
     })
 }
 
@@ -176,7 +173,7 @@ pub fn format_log(log: &Log, config: &Config) -> String {
 mod tests {
     use super::*;
     use crate::{
-        models::{Analysis, EntityMention, IngestResult, StorageAction, StorageDecision},
+        models::{Analysis, IngestResult, StorageAction, StorageDecision},
         storage::StorageGate,
         test_support::{config as test_config, glm_response, mock_server},
     };
@@ -189,18 +186,6 @@ mod tests {
             .unwrap();
         store.migrate().await.unwrap();
         (store, path)
-    }
-
-    fn analysis_json() -> String {
-        serde_json::json!({
-            "category":"work",
-            "summary":"Testing the agent",
-            "topics":["Rust","testing"],
-            "entities":[{"kind":"project","name":"Daily Agent"}],
-            "sentiment":"positive",
-            "importance":4
-        })
-        .to_string()
     }
 
     #[tokio::test]
@@ -250,8 +235,16 @@ mod tests {
 
         let ignore = StorageGate::from_test_decision(StorageDecision {
             action: StorageAction::Ignore,
-            store_score: 0.2,
-            ignore_score: 0.9,
+            confidence: 0.9,
+            reason_code: "question".into(),
+            analysis: Analysis {
+                category: "other".into(),
+                summary: "question".into(),
+                topics: vec![],
+                entities: vec![],
+                sentiment: "neutral".into(),
+                importance: 1,
+            },
         });
         assert!(matches!(
             ingest_log(&store, &config, &ignore, &user.id, "a question", "terminal")
@@ -261,8 +254,16 @@ mod tests {
         ));
         let ask = StorageGate::from_test_decision(StorageDecision {
             action: StorageAction::Ask,
-            store_score: 0.7,
-            ignore_score: 0.68,
+            confidence: 0.5,
+            reason_code: "ambiguous".into(),
+            analysis: Analysis {
+                category: "other".into(),
+                summary: "ambiguous".into(),
+                topics: vec![],
+                entities: vec![],
+                sentiment: "neutral".into(),
+                importance: 1,
+            },
         });
         assert!(matches!(
             ingest_log(&store, &config, &ask, &user.id, "ambiguous", "terminal")
@@ -291,79 +292,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn analyzes_new_log_and_discovers_valid_connections() {
+    async fn explicit_connections_validate_model_boundaries() {
         let (store, path) = store().await;
         let user = store.ensure_local_user("owner").await.unwrap();
-        let old = store
-            .insert_log(&user.id, "terminal", "Rust testing", "normal")
+        store
+            .insert_log(&user.id, "terminal", "first", "normal")
             .await
             .unwrap();
         store
-            .save_analysis(
-                &old.id,
-                &Analysis {
-                    category: "work".into(),
-                    summary: "Earlier Rust testing".into(),
-                    topics: vec!["Rust".into(), "testing".into()],
-                    entities: vec![EntityMention {
-                        kind: "project".into(),
-                        name: "Daily Agent".into(),
-                    }],
-                    sentiment: "positive".into(),
-                    importance: 3,
-                },
-            )
-            .await
-            .unwrap();
-        let connection = serde_json::json!({
-            "overview":"Related work",
-            "connections":[{
-                "kind":"shared_topic",
-                "description":"Both logs discuss Rust testing",
-                "confidence":0.9,
-                "source_log_ids":[old.id, "invalid-current-placeholder"]
-            }]
-        });
-        let (url, handle) = mock_server(vec![
-            glm_response(&analysis_json()),
-            glm_response(&connection.to_string()),
-        ])
-        .await;
-        let config = test_config(format!("sqlite://{}", path.display()), url, Some("key"));
-        let result = add_log(
-            &store,
-            &config,
-            &user.id,
-            "More Rust testing",
-            "terminal",
-            "normal",
-        )
-        .await
-        .unwrap();
-        assert_eq!(result.log.analysis_status, "complete");
-        // The model referenced an ID outside the supplied set, so it is rejected.
-        assert!(result.connections.is_empty());
-        assert_eq!(handle.await.unwrap().len(), 2);
-        drop(store);
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[tokio::test]
-    async fn marks_failed_analysis_and_handles_connection_boundaries() {
-        let (store, path) = store().await;
-        let user = store.ensure_local_user("owner").await.unwrap();
-        let (url, handle) = mock_server(vec![glm_response("not json")]).await;
-        let config = test_config(format!("sqlite://{}", path.display()), url, Some("key"));
-        let result = add_log(&store, &config, &user.id, "a log", "terminal", "normal")
-            .await
-            .unwrap();
-        assert_eq!(result.log.analysis_status, "failed");
-        handle.await.unwrap();
-        let result = connections(&store, &config, &user.id, 30).await.unwrap();
-        assert!(result.connections.is_empty());
-
-        store
-            .insert_log(&user.id, "terminal", "second", "no_upload")
+            .insert_log(&user.id, "terminal", "second", "normal")
             .await
             .unwrap();
         let logs = store.recent_logs(&user.id, 30).await.unwrap();

@@ -3,7 +3,7 @@ use std::{fs, path::Path, sync::Arc};
 
 #[derive(Clone)]
 pub struct PromptStore {
-    classify: Arc<String>,
+    local_classify: Arc<String>,
     connections: Arc<String>,
 }
 
@@ -11,13 +11,13 @@ impl PromptStore {
     pub fn load(resources: impl AsRef<Path>, locale: &str) -> Result<Self> {
         let directory = resources.as_ref().join("prompts").join(locale);
         Ok(Self {
-            classify: Arc::new(read(&directory.join("classify.system.md"))?),
+            local_classify: Arc::new(read(&directory.join("local-classify.system.md"))?),
             connections: Arc::new(read(&directory.join("connections.system.md"))?),
         })
     }
 
-    pub fn classify(&self) -> &str {
-        &self.classify
+    pub fn local_classify(&self) -> &str {
+        &self.local_classify
     }
 
     pub fn connections(&self) -> &str {
@@ -38,7 +38,7 @@ mod tests {
     fn loads_external_prompts_for_both_languages() {
         for locale in ["zh-CN", "en-US"] {
             let prompts = PromptStore::load("./resources", locale).unwrap();
-            assert!(prompts.classify().contains("work"));
+            assert!(prompts.local_classify().contains("storage_action"));
             assert!(prompts.connections().contains("shared_topic"));
         }
     }

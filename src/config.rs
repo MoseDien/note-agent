@@ -1,7 +1,6 @@
 use crate::{i18n::I18n, prompts::PromptStore};
 use anyhow::{Context, Result};
 use secrecy::SecretString;
-use std::path::PathBuf;
 
 #[derive(Clone)]
 pub struct Config {
@@ -13,12 +12,9 @@ pub struct Config {
     pub telegram_token: Option<SecretString>,
     pub i18n: I18n,
     pub prompts: PromptStore,
-    pub storage_enabled: bool,
-    pub storage_examples_path: PathBuf,
-    pub storage_model_cache: PathBuf,
-    pub storage_min_similarity: f32,
-    pub storage_min_margin: f32,
-    pub storage_top_k: usize,
+    pub local_llm_url: String,
+    pub local_llm_model: String,
+    pub local_llm_timeout_seconds: u64,
 }
 
 impl Config {
@@ -32,10 +28,6 @@ impl Config {
             std::env::var("DAILY_AGENT_RESOURCES").unwrap_or_else(|_| "./resources".into());
         let i18n = I18n::load(&resources, &locale)?;
         let prompts = PromptStore::load(&resources, &locale)?;
-        let storage_enabled = parse("DAILY_AGENT_STORAGE_ENABLED", true)?;
-        let storage_examples_path = std::env::var("DAILY_AGENT_STORAGE_EXAMPLES")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(&resources).join("storage-examples.json"));
         Ok(Self {
             database_url: format!("sqlite://{db}"),
             local_user: std::env::var("DAILY_AGENT_USER").unwrap_or_else(|_| "default".into()),
@@ -46,14 +38,11 @@ impl Config {
             telegram_token: std::env::var("TELOXIDE_TOKEN").ok().map(Into::into),
             i18n,
             prompts,
-            storage_enabled,
-            storage_examples_path,
-            storage_model_cache: std::env::var("FASTEMBED_CACHE_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| ".fastembed_cache".into()),
-            storage_min_similarity: parse("DAILY_AGENT_STORAGE_MIN_SIMILARITY", 0.75)?,
-            storage_min_margin: parse("DAILY_AGENT_STORAGE_MIN_MARGIN", 0.03)?,
-            storage_top_k: parse("DAILY_AGENT_STORAGE_TOP_K", 3)?,
+            local_llm_url: std::env::var("DAILY_AGENT_LOCAL_LLM_URL")
+                .unwrap_or_else(|_| "http://127.0.0.1:11434".into()),
+            local_llm_model: std::env::var("DAILY_AGENT_LOCAL_LLM_MODEL")
+                .unwrap_or_else(|_| "qwen3:1.7b".into()),
+            local_llm_timeout_seconds: parse("DAILY_AGENT_LOCAL_LLM_TIMEOUT_SECONDS", 60)?,
         })
     }
 }

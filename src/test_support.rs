@@ -12,17 +12,14 @@ pub fn config(database_url: String, base_url: String, api_key: Option<&str>) -> 
         database_url,
         local_user: "test".into(),
         glm_api_key: api_key.map(|value| SecretString::from(value.to_owned())),
-        glm_base_url: base_url,
+        glm_base_url: base_url.clone(),
         glm_model: "test-model".into(),
         telegram_token: Some(SecretString::from("123:test".to_owned())),
         i18n: I18n::load("./resources", "en-US").unwrap(),
         prompts: PromptStore::load("./resources", "en-US").unwrap(),
-        storage_enabled: false,
-        storage_examples_path: "./resources/storage-examples.json".into(),
-        storage_model_cache: ".fastembed_cache".into(),
-        storage_min_similarity: 0.75,
-        storage_min_margin: 0.03,
-        storage_top_k: 3,
+        local_llm_url: base_url.clone(),
+        local_llm_model: "test-local-model".into(),
+        local_llm_timeout_seconds: 5,
     }
 }
 

@@ -1,8 +1,4 @@
-use crate::{
-    config::Config,
-    models::{Analysis, ConnectionAnalysis},
-    prompts::PromptStore,
-};
+use crate::{config::Config, models::ConnectionAnalysis, prompts::PromptStore};
 use anyhow::{Context, Result};
 use reqwest::Client;
 use secrecy::{ExposeSecret, SecretString};
@@ -98,34 +94,6 @@ impl GlmClient {
         serde_json::from_str(content).with_context(|| "GLM did not return valid JSON")
     }
 
-    pub async fn analyze(&self, text: &str) -> Result<Analysis> {
-        let analysis: Analysis = self.json(self.prompts.classify(), text).await?;
-        anyhow::ensure!(
-            [
-                "work",
-                "study",
-                "health",
-                "relationships",
-                "finance",
-                "inspiration",
-                "emotions",
-                "life",
-                "other"
-            ]
-            .contains(&analysis.category.as_str()),
-            "GLM returned an invalid category code"
-        );
-        anyhow::ensure!(
-            ["positive", "neutral", "negative", "mixed"].contains(&analysis.sentiment.as_str()),
-            "GLM returned an invalid sentiment code"
-        );
-        anyhow::ensure!(
-            (1..=5).contains(&analysis.importance),
-            "GLM returned an invalid importance value"
-        );
-        Ok(analysis)
-    }
-
     pub async fn connections(&self, input: &str) -> Result<ConnectionAnalysis> {
         let mut analysis: ConnectionAnalysis = self.json(self.prompts.connections(), input).await?;
         analysis.connections.retain(|connection| {
@@ -154,43 +122,6 @@ mod tests {
         (GlmClient::from_config(&config).unwrap(), handle)
     }
 
-    fn valid_analysis() -> String {
-        serde_json::json!({
-            "category":"work",
-            "summary":"Worked on tests",
-            "topics":["testing"],
-            "entities":[],
-            "sentiment":"positive",
-            "importance":4
-        })
-        .to_string()
-    }
-
-    #[tokio::test]
-    async fn parses_and_validates_analysis() {
-        let (client, handle) = client_with(&valid_analysis()).await;
-        let result = client.analyze("a log").await.unwrap();
-        assert_eq!(result.category, "work");
-        let requests = handle.await.unwrap();
-        assert!(requests[0].contains("test-model"));
-        assert!(requests[0].contains("a log"));
-    }
-
-    #[tokio::test]
-    async fn rejects_invalid_analysis_codes_and_values() {
-        for (field, value) in [
-            ("category", serde_json::json!("invalid")),
-            ("sentiment", serde_json::json!("invalid")),
-            ("importance", serde_json::json!(9)),
-        ] {
-            let mut analysis: serde_json::Value = serde_json::from_str(&valid_analysis()).unwrap();
-            analysis[field] = value;
-            let (client, handle) = client_with(&analysis.to_string()).await;
-            assert!(client.analyze("log").await.is_err());
-            handle.await.unwrap();
-        }
-    }
-
     #[tokio::test]
     async fn filters_invalid_connection_kinds() {
         let content = serde_json::json!({
@@ -217,14 +148,14 @@ mod tests {
         assert!(
             GlmClient::from_config(&config)
                 .unwrap()
-                .analyze("log")
+                .connections("[]")
                 .await
                 .is_err()
         );
         handle.await.unwrap();
 
         let (client, handle) = client_with("not json").await;
-        assert!(client.analyze("log").await.is_err());
+        assert!(client.connections("[]").await.is_err());
         handle.await.unwrap();
     }
 }

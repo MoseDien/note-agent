@@ -22,7 +22,7 @@ fn run(db: &Path, args: &[&str]) -> Output {
         .env("DAILY_AGENT_DB", db)
         .env("DAILY_AGENT_LOCALE", "en-US")
         .env("DAILY_AGENT_RESOURCES", "./resources")
-        .env("DAILY_AGENT_STORAGE_ENABLED", "false")
+        .env("DAILY_AGENT_LOCAL_LLM_URL", "http://127.0.0.1:1")
         .env_remove("GLM_API_KEY")
         .output()
         .unwrap()
@@ -50,13 +50,6 @@ fn exercises_cli_commands() {
             .unwrap()
             .contains("At least two logs")
     );
-    let decision = run(&db, &["decide", "Should this be stored?"]);
-    assert!(
-        String::from_utf8(decision.stdout)
-            .unwrap()
-            .contains("store_score")
-    );
-
     let export_path = db.with_extension("json");
     let exported = run(&db, &["export", "--output", export_path.to_str().unwrap()]);
     assert!(exported.status.success());
@@ -78,7 +71,7 @@ fn exercises_interactive_mode_and_configuration_error() {
         .env("DAILY_AGENT_DB", &db)
         .env("DAILY_AGENT_LOCALE", "en-US")
         .env("DAILY_AGENT_RESOURCES", "./resources")
-        .env("DAILY_AGENT_STORAGE_ENABLED", "false")
+        .env("DAILY_AGENT_LOCAL_LLM_URL", "http://127.0.0.1:1")
         .env_remove("GLM_API_KEY")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

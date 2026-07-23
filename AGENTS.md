@@ -7,7 +7,7 @@ Daily Agent is a Rust personal-journal agent with two input channels:
 - Terminal CLI and interactive mode
 - Telegram private-chat gateway
 
-Both channels share the same SQLite users, logs, memories, and GLM analysis pipeline.
+Both channels share the same SQLite users and memories. Ollama handles ordinary input locally; GLM is reserved for explicit advanced operations.
 
 ## Technology
 
@@ -51,7 +51,7 @@ cargo run -- gateway
 - `src/glm.rs`: GLM API transport and response validation
 - `src/db.rs`: SQLite persistence, migrations, FTS, and identity pairing
 - `src/privacy.rs`: local PII redaction
-- `src/storage.rs`: local multilingual-e5-small storage decision
+- `src/storage.rs`: local Ollama storage decision and journal classification
 - `src/i18n.rs`: runtime UI resource loading
 - `src/prompts.rs`: runtime prompt loading
 - `src/models.rs`: shared domain and API types
@@ -93,7 +93,7 @@ The MVP intentionally stores SQLite data without encryption. Do not describe it 
 - Never log original journal text, API keys, Telegram tokens, or redaction mappings.
 - Redact supported PII locally before sending text to GLM.
 - A log with `privacy_level = no_upload` must never be sent to GLM.
-- Plain input must pass the local storage gate before persistence; `/log` and `/private` are explicit overrides.
+- Plain input must pass local Ollama before persistence; it must never fall back to GLM. `/log` and `/private` are explicit overrides.
 - Preserve the original log when GLM or network analysis fails.
 - Every user query and mutation must be scoped by the internal user ID.
 - Telegram usernames are not stable identities; use the stored Telegram numeric user ID mapping.
@@ -107,9 +107,13 @@ data/*.db
 data/*.db-*
 ```
 
+## Model routing
+
+All ordinary input classification, summary, topics, entities, sentiment, and importance must use the configured local Ollama model. GLM may only be invoked by explicit advanced commands or user-configured scheduled tasks. A local model outage must return `ask` or preserve an explicit `/log`; it must never trigger a remote fallback.
+
 ## GLM integration
 
-The first version uses GLM as its only provider and one configured model. Keep the endpoint and model configurable through environment variables.
+The first version uses GLM as its only advanced provider and one configured model. Keep the endpoint and model configurable through environment variables.
 
 Require JSON responses and validate stable category, sentiment, and connection codes before persistence. Do not trust model-provided source log IDs; verify that every referenced ID belongs to the current user's supplied candidate set.
 

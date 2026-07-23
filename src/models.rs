@@ -74,8 +74,9 @@ pub enum StorageAction {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageDecision {
     pub action: StorageAction,
-    pub store_score: f32,
-    pub ignore_score: f32,
+    pub confidence: f32,
+    pub reason_code: String,
+    pub analysis: Analysis,
 }
 
 #[derive(Debug, Serialize)]
@@ -83,15 +84,15 @@ pub struct StorageDecision {
 pub enum IngestResult {
     Stored {
         analysis: Box<AddResult>,
-        store_score: f32,
-        ignore_score: f32,
+        confidence: f32,
+        reason_code: String,
     },
     Ignored {
-        store_score: f32,
-        ignore_score: f32,
+        confidence: f32,
+        reason_code: String,
     },
     Ask {
-        store_score: f32,
-        ignore_score: f32,
+        confidence: f32,
+        reason_code: String,
     },
 }
