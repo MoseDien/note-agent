@@ -327,11 +327,27 @@ mod tests {
     }
 
     #[test]
-    fn example_dataset_has_twenty_items_per_class() {
+    fn example_dataset_has_five_hundred_items_per_class() {
         let examples: Examples =
             serde_json::from_str(&fs::read_to_string("./resources/storage-examples.json").unwrap())
                 .unwrap();
-        assert_eq!(examples.store.len(), 20);
-        assert_eq!(examples.ignore.len(), 20);
+        assert_eq!(examples.store.len(), 500);
+        assert_eq!(examples.ignore.len(), 500);
+        assert_eq!(
+            examples
+                .store
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            500
+        );
+        assert_eq!(
+            examples
+                .ignore
+                .iter()
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            500
+        );
     }
 }
