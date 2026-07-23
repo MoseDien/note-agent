@@ -62,3 +62,36 @@ pub struct AddResult {
     pub redacted_preview: String,
     pub connections: Vec<Connection>,
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StorageAction {
+    Store,
+    Ignore,
+    Ask,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StorageDecision {
+    pub action: StorageAction,
+    pub store_score: f32,
+    pub ignore_score: f32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "decision", rename_all = "snake_case")]
+pub enum IngestResult {
+    Stored {
+        analysis: Box<AddResult>,
+        store_score: f32,
+        ignore_score: f32,
+    },
+    Ignored {
+        store_score: f32,
+        ignore_score: f32,
+    },
+    Ask {
+        store_score: f32,
+        ignore_score: f32,
+    },
+}

@@ -28,6 +28,7 @@ cargo fmt --all -- --check
 cargo check
 cargo test
 cargo clippy -- -D warnings
+cargo llvm-cov --summary-only --fail-under-lines 90
 ```
 
 Start Terminal interactive mode:
@@ -50,6 +51,7 @@ cargo run -- gateway
 - `src/glm.rs`: GLM API transport and response validation
 - `src/db.rs`: SQLite persistence, migrations, FTS, and identity pairing
 - `src/privacy.rs`: local PII redaction
+- `src/storage.rs`: local multilingual-e5-small storage decision
 - `src/i18n.rs`: runtime UI resource loading
 - `src/prompts.rs`: runtime prompt loading
 - `src/models.rs`: shared domain and API types
@@ -91,6 +93,7 @@ The MVP intentionally stores SQLite data without encryption. Do not describe it 
 - Never log original journal text, API keys, Telegram tokens, or redaction mappings.
 - Redact supported PII locally before sending text to GLM.
 - A log with `privacy_level = no_upload` must never be sent to GLM.
+- Plain input must pass the local storage gate before persistence; `/log` and `/private` are explicit overrides.
 - Preserve the original log when GLM or network analysis fails.
 - Every user query and mutation must be scoped by the internal user ID.
 - Telegram usernames are not stable identities; use the stored Telegram numeric user ID mapping.
@@ -129,4 +132,4 @@ For behavior changes, add focused tests covering the relevant boundary. In parti
 - external prompt availability
 - invalid locale rejection
 
-Before handing off changes, run formatting, tests, and Clippy with warnings denied.
+Before handing off changes, run formatting, tests, and Clippy with warnings denied. Coverage changes must also pass the 90% line-coverage gate. GLM and Telegram tests must use local mock services rather than real credentials or external APIs.

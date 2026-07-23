@@ -328,4 +328,92 @@ mod tests {
         store.pool.close().await;
         let _ = std::fs::remove_file(path);
     }
+
+    #[tokio::test]
+    async fn persists_analysis_searches_and_cleans_derived_data() {
+        let (store, path) = test_store().await;
+        let user = store.ensure_local_user("analyst").await.unwrap();
+        let first = store
+            .insert_log(&user.id, "terminal", "Rust privacy project", "normal")
+            .await
+            .unwrap();
+        let second = store
+            .insert_log(&user.id, "telegram", "Rust memory design", "normal")
+            .await
+            .unwrap();
+        let analysis = Analysis {
+            category: "work".into(),
+            summary: "Rust project work".into(),
+            topics: vec!["Rust".into(), "privacy".into()],
+            entities: vec![crate::models::EntityMention {
+                kind: "project".into(),
+                name: "Daily Agent".into(),
+            }],
+            sentiment: "positive".into(),
+            importance: 4,
+        };
+        store.save_analysis(&first.id, &analysis).await.unwrap();
+        store.save_analysis(&second.id, &analysis).await.unwrap();
+
+        let loaded = store.get_log(&first.id).await.unwrap();
+        assert_eq!(loaded.category.as_deref(), Some("work"));
+        assert_eq!(store.export_user(&user.id).await.unwrap().len(), 2);
+        let matches = store
+            .search_candidates(&user.id, "Rust privacy", Some(&second.id), 5)
+            .await
+            .unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].id, first.id);
+
+        store
+            .save_connections(
+                &user.id,
+                &[Connection {
+                    kind: "shared_topic".into(),
+                    description: "Both mention Rust".into(),
+                    confidence: 0.9,
+                    source_log_ids: vec![first.id.clone(), second.id.clone()],
+                }],
+            )
+            .await
+            .unwrap();
+        assert!(store.delete_log(&user.id, &first.id).await.unwrap());
+        assert!(store.get_log(&first.id).await.is_err());
+        store.mark_analysis_failed(&second.id).await.unwrap();
+        assert_eq!(
+            store.get_log(&second.id).await.unwrap().analysis_status,
+            "failed"
+        );
+
+        store.pool.close().await;
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn migrates_legacy_categories_and_search_falls_back() {
+        let (store, path) = test_store().await;
+        let user = store.ensure_local_user("legacy").await.unwrap();
+        let log = store
+            .insert_log(&user.id, "terminal", "legacy", "normal")
+            .await
+            .unwrap();
+        sqlx::query("UPDATE logs SET category='工作' WHERE id=?")
+            .bind(&log.id)
+            .execute(&store.pool)
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        assert_eq!(
+            store.get_log(&log.id).await.unwrap().category.as_deref(),
+            Some("work")
+        );
+        let fallback = store
+            .search_candidates(&user.id, "x", None, 5)
+            .await
+            .unwrap();
+        assert_eq!(fallback.len(), 1);
+
+        store.pool.close().await;
+        let _ = std::fs::remove_file(path);
+    }
 }

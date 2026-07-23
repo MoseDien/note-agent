@@ -9,6 +9,7 @@
 - 一次性配对码绑定 Terminal 与 Telegram 身份
 - SQLite 明文存储、用户隔离与 FTS5 全文检索
 - GLM 分类、摘要、标签、实体和情绪分析
+- multilingual-e5-small 本地判断普通输入是否需要存储
 - 基于候选历史记录的联系分析与证据 ID 校验
 - 手机号、邮箱、身份证号、银行卡号和 IP 的本地脱敏
 - 查看、删除和 JSON 导出
@@ -98,7 +99,33 @@ cargo run -- link-telegram
 cargo run -- gateway
 ```
 
-普通文字会直接保存并分析。使用 `/private 内容` 可以仅保存而不发送给 GLM。还支持 `/log`、`/recent`、`/connections`、`/delete`、`/export`、`/privacy` 和 `/help`。
+普通文字会先通过本地 `multilingual-e5-small` 判断：`store` 才保存，`ignore` 不保存，低置信度 `ask` 也暂不保存。`/log 内容` 可以强制保存，`/private 内容` 可以强制仅在本地保存。
+
+## 本地存储判断
+
+首次启动 Terminal 交互模式、Telegram gateway 或 `decide` 命令时，会下载 `intfloat/multilingual-e5-small` 到 `.fastembed_cache/`；之后可以离线加载。模型只在本地生成 embedding。
+
+测试一段输入但不保存：
+
+```bash
+cargo run -- decide "今天完成了新的功能"
+cargo run -- decide "什么是 SQLite？"
+```
+
+示例数据位于 `resources/storage-examples.json`，当前包含 `store` 和 `ignore` 各 20 条中英文示例。可以直接追加字符串，重启程序后生效。
+
+相关配置：
+
+```bash
+DAILY_AGENT_STORAGE_ENABLED=true
+DAILY_AGENT_STORAGE_EXAMPLES=./resources/storage-examples.json
+DAILY_AGENT_STORAGE_MIN_SIMILARITY=0.75
+DAILY_AGENT_STORAGE_MIN_MARGIN=0.03
+DAILY_AGENT_STORAGE_TOP_K=3
+FASTEMBED_CACHE_DIR=./.fastembed_cache
+```
+
+阈值只是初始值，应使用真实输入校准。设置 `DAILY_AGENT_STORAGE_ENABLED=false` 会关闭本地判断并恢复为普通输入直接存储。
 
 ## Memory 数据流
 
@@ -121,4 +148,15 @@ Terminal / Telegram
 cargo fmt --all -- --check
 cargo check
 cargo test
+cargo clippy -- -D warnings
 ```
+
+覆盖率工具与 90% 门禁：
+
+```bash
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov --locked
+cargo llvm-cov --summary-only --fail-under-lines 90
+```
+
+测试使用本机回环地址上的临时 mock HTTP 服务模拟 GLM 和 Telegram，不会访问真实 Provider、读取 `.env` 或操作正式用户数据库。

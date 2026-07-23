@@ -6,12 +6,16 @@ mod i18n;
 mod models;
 mod privacy;
 mod prompts;
+mod storage;
 mod telegram;
+#[cfg(test)]
+mod test_support;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use db::Store;
 use std::path::PathBuf;
+use storage::StorageGate;
 
 #[derive(Parser)]
 #[command(
@@ -42,6 +46,8 @@ enum Command {
         #[arg(short, long, default_value_t = 30)]
         limit: u32,
     },
+    /// Decide locally whether an input should be stored, without saving it.
+    Decide { text: String },
     /// Delete one log and its derived memories.
     Delete { id: String },
     /// Export all logs as JSON.
@@ -88,7 +94,10 @@ async fn main() -> Result<()> {
 
     let user = store.ensure_local_user(&config.local_user).await?;
     match cli.command {
-        None => interactive(&store, &config, &user.id).await?,
+        None => {
+            let storage_gate = StorageGate::from_config(&config).await?;
+            interactive(&store, &config, &storage_gate, &user.id).await?
+        }
         Some(Command::Add { text, privacy }) => {
             let result = agent::add_log(
                 &store,
@@ -115,6 +124,13 @@ async fn main() -> Result<()> {
         Some(Command::Connections { limit }) => {
             let result = agent::connections(&store, &config, &user.id, limit).await?;
             println!("{}", serde_json::to_string_pretty(&result)?);
+        }
+        Some(Command::Decide { text }) => {
+            let storage_gate = StorageGate::from_config(&config).await?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&storage_gate.decide(&text).await?)?
+            );
         }
         Some(Command::Delete { id }) => {
             anyhow::ensure!(
@@ -155,7 +171,12 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn interactive(store: &Store, config: &config::Config, user_id: &str) -> Result<()> {
+async fn interactive(
+    store: &Store,
+    config: &config::Config,
+    storage_gate: &StorageGate,
+    user_id: &str,
+) -> Result<()> {
     use std::io::Write;
     println!("{}", config.i18n.text("interactive.welcome"));
     loop {
@@ -183,7 +204,8 @@ async fn interactive(store: &Store, config: &config::Config, user_id: &str) -> R
             text => println!(
                 "{}",
                 serde_json::to_string_pretty(
-                    &agent::add_log(store, config, user_id, text, "terminal", "normal").await?
+                    &agent::ingest_log(store, config, storage_gate, user_id, text, "terminal")
+                        .await?
                 )?
             ),
         }

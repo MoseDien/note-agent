@@ -142,3 +142,89 @@ impl GlmClient {
         Ok(analysis)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::{config as test_config, glm_response, mock_server};
+
+    async fn client_with(content: &str) -> (GlmClient, tokio::task::JoinHandle<Vec<String>>) {
+        let (url, handle) = mock_server(vec![glm_response(content)]).await;
+        let config = test_config("sqlite::memory:".into(), url, Some("key"));
+        (GlmClient::from_config(&config).unwrap(), handle)
+    }
+
+    fn valid_analysis() -> String {
+        serde_json::json!({
+            "category":"work",
+            "summary":"Worked on tests",
+            "topics":["testing"],
+            "entities":[],
+            "sentiment":"positive",
+            "importance":4
+        })
+        .to_string()
+    }
+
+    #[tokio::test]
+    async fn parses_and_validates_analysis() {
+        let (client, handle) = client_with(&valid_analysis()).await;
+        let result = client.analyze("a log").await.unwrap();
+        assert_eq!(result.category, "work");
+        let requests = handle.await.unwrap();
+        assert!(requests[0].contains("test-model"));
+        assert!(requests[0].contains("a log"));
+    }
+
+    #[tokio::test]
+    async fn rejects_invalid_analysis_codes_and_values() {
+        for (field, value) in [
+            ("category", serde_json::json!("invalid")),
+            ("sentiment", serde_json::json!("invalid")),
+            ("importance", serde_json::json!(9)),
+        ] {
+            let mut analysis: serde_json::Value = serde_json::from_str(&valid_analysis()).unwrap();
+            analysis[field] = value;
+            let (client, handle) = client_with(&analysis.to_string()).await;
+            assert!(client.analyze("log").await.is_err());
+            handle.await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn filters_invalid_connection_kinds() {
+        let content = serde_json::json!({
+            "overview":"overview",
+            "connections":[
+                {"kind":"shared_topic","description":"valid","confidence":0.8,"source_log_ids":["a","b"]},
+                {"kind":"invented","description":"invalid","confidence":0.8,"source_log_ids":["a","b"]}
+            ]
+        })
+        .to_string();
+        let (client, handle) = client_with(&content).await;
+        let result = client.connections("[]").await.unwrap();
+        assert_eq!(result.connections.len(), 1);
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn handles_missing_key_empty_choices_and_invalid_json() {
+        let config = test_config("sqlite::memory:".into(), "http://localhost".into(), None);
+        assert!(GlmClient::from_config(&config).is_err());
+
+        let (url, handle) = mock_server(vec!["{\"choices\":[]}".into()]).await;
+        let config = test_config("sqlite::memory:".into(), url, Some("key"));
+        assert!(
+            GlmClient::from_config(&config)
+                .unwrap()
+                .analyze("log")
+                .await
+                .is_err()
+        );
+        handle.await.unwrap();
+
+        let (client, handle) = client_with("not json").await;
+        assert!(client.analyze("log").await.is_err());
+        handle.await.unwrap();
+    }
+}

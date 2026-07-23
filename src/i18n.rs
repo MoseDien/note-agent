@@ -8,28 +8,6 @@ pub struct I18n {
     messages: Arc<HashMap<String, String>>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn loads_both_supported_languages() {
-        let zh = I18n::load("./resources", "zh-CN").unwrap();
-        let en = I18n::load("./resources", "en-US").unwrap();
-        assert_eq!(zh.category(Some("work")), "工作");
-        assert_eq!(en.category(Some("work")), "Work");
-        assert_eq!(
-            en.format("terminal.deleted", &[("id", "abc")]),
-            "Deleted abc"
-        );
-    }
-
-    #[test]
-    fn rejects_unsupported_language() {
-        assert!(I18n::load("./resources", "fr-FR").is_err());
-    }
-}
-
 impl I18n {
     pub fn load(resources: impl AsRef<Path>, locale: &str) -> Result<Self> {
         anyhow::ensure!(
@@ -72,5 +50,27 @@ impl I18n {
                     .unwrap_or_else(|| code.to_owned())
             })
             .unwrap_or_else(|| self.text("category.pending"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loads_both_supported_languages() {
+        let zh = I18n::load("./resources", "zh-CN").unwrap();
+        let en = I18n::load("./resources", "en-US").unwrap();
+        assert_eq!(zh.category(Some("work")), "工作");
+        assert_eq!(en.category(Some("work")), "Work");
+        assert_eq!(
+            en.format("terminal.deleted", &[("id", "abc")]),
+            "Deleted abc"
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_language() {
+        assert!(I18n::load("./resources", "fr-FR").is_err());
     }
 }
