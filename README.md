@@ -29,13 +29,14 @@
 - Rust 1.89+
 - Ollama
 
-安装 Ollama：
+使用 Homebrew 安装 Ollama：
 
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh
+brew install --cask ollama
+open -a Ollama
 ```
 
-也可以从 Ollama 官网下载安装 macOS 应用。安装后启动 Ollama，并下载本地模型：
+也可以从 Ollama 官网下载安装 macOS 应用。确认服务启动后下载本地模型：
 
 ```bash
 ollama pull qwen3:1.7b
@@ -118,10 +119,11 @@ target/release/daily-agent add --privacy no-upload "仅保存，不调用模型"
 target/release/daily-agent recent
 target/release/daily-agent connections
 target/release/daily-agent delete <LOG_ID>
+target/release/daily-agent delete -1
 target/release/daily-agent export --output export.json
 ```
 
-`connections` 是明确的高级功能，会调用 GLM。普通输入、`recent`、`delete` 和 `export` 不调用 GLM。
+`connections` 是暂时保留的实验性高级功能，会调用 GLM；命令设计后续再确定。普通输入、`recent`、`delete` 和 `export` 不调用 GLM。
 
 ## Telegram
 
@@ -151,9 +153,12 @@ Telegram 命令：
 /private 内容  强制保存，不调用模型
 /connections   调用 GLM 进行高级联系分析
 /recent        查看最近记录
-/delete ID     删除记录
+/delete ID     按完整 ID 删除记录
+/delete -N     删除倒数第 N 条记录，N 为 1 至 10
 /export        导出数据
 ```
+
+保存成功时 Telegram 只显示完整记录 ID 的前 4 位和分类，不重复用户输入。数据库仍保留完整 ID、原文和分析结果。
 
 ## 本地分类结果
 
@@ -188,7 +193,7 @@ Ollama 使用 JSON Schema 返回：
 
 ## GLM 与定时任务
 
-当前已实现的高级入口是 `connections`。定时任务调度器尚未实现；未来的定时周报或月报必须通过独立高级路由调用 GLM，不能复用普通输入路径。
+当前暂时保留的实验性高级入口是 `connections`，不会自动运行。定时任务调度器尚未实现；未来的定时周报或月报必须通过独立高级路由调用 GLM，不能复用普通输入路径。
 
 ## 验证
 

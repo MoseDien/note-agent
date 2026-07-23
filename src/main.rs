@@ -3,10 +3,10 @@ mod config;
 mod db;
 mod glm;
 mod i18n;
+mod local_llm;
 mod models;
 mod privacy;
 mod prompts;
-mod storage;
 mod telegram;
 #[cfg(test)]
 mod test_support;
@@ -14,8 +14,8 @@ mod test_support;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use db::Store;
+use local_llm::LocalClassifier;
 use std::path::PathBuf;
-use storage::StorageGate;
 
 #[derive(Parser)]
 #[command(
@@ -49,7 +49,10 @@ enum Command {
     /// Decide locally whether an input should be stored, without saving it.
     Decide { text: String },
     /// Delete one log and its derived memories.
-    Delete { id: String },
+    Delete {
+        #[arg(allow_hyphen_values = true)]
+        id: String,
+    },
     /// Export all logs as JSON.
     Export {
         #[arg(short, long)]
@@ -95,8 +98,8 @@ async fn main() -> Result<()> {
     let user = store.ensure_local_user(&config.local_user).await?;
     match cli.command {
         None => {
-            let storage_gate = StorageGate::from_config(&config).await?;
-            interactive(&store, &config, &storage_gate, &user.id).await?
+            let local_classifier = LocalClassifier::from_config(&config).await?;
+            interactive(&store, &config, &local_classifier, &user.id).await?
         }
         Some(Command::Add { text, privacy }) => {
             let result = agent::add_log(
@@ -126,15 +129,15 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Some(Command::Decide { text }) => {
-            let storage_gate = StorageGate::from_config(&config).await?;
+            let local_classifier = LocalClassifier::from_config(&config).await?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&storage_gate.decide(&text).await?)?
+                serde_json::to_string_pretty(&local_classifier.decide(&text).await?)?
             );
         }
         Some(Command::Delete { id }) => {
             anyhow::ensure!(
-                store.delete_log(&user.id, &id).await?,
+                agent::delete_log_reference(&store, &config, &user.id, &id).await?,
                 config.i18n.text("terminal.log_not_found")
             );
             println!("{}", config.i18n.format("terminal.deleted", &[("id", &id)]));
@@ -174,7 +177,7 @@ async fn main() -> Result<()> {
 async fn interactive(
     store: &Store,
     config: &config::Config,
-    storage_gate: &StorageGate,
+    local_classifier: &LocalClassifier,
     user_id: &str,
 ) -> Result<()> {
     use std::io::Write;
@@ -201,10 +204,25 @@ async fn interactive(
                     &agent::connections(store, config, user_id, 30).await?
                 )?
             ),
+            text if text.starts_with("/delete ") || text.starts_with("delete ") => {
+                let reference = text
+                    .strip_prefix("/delete ")
+                    .or_else(|| text.strip_prefix("delete "))
+                    .unwrap()
+                    .trim();
+                if agent::delete_log_reference(store, config, user_id, reference).await? {
+                    println!(
+                        "{}",
+                        config.i18n.format("terminal.deleted", &[("id", reference)])
+                    );
+                } else {
+                    println!("{}", config.i18n.text("terminal.log_not_found"));
+                }
+            }
             text => println!(
                 "{}",
                 serde_json::to_string_pretty(
-                    &agent::ingest_log(store, config, storage_gate, user_id, text, "terminal")
+                    &agent::ingest_log(store, config, local_classifier, user_id, text, "terminal")
                         .await?
                 )?
             ),

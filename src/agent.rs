@@ -2,22 +2,22 @@ use crate::{
     config::Config,
     db::Store,
     glm::GlmClient,
+    local_llm::LocalClassifier,
     models::{AddResult, Analysis, ConnectionAnalysis, IngestResult, Log, StorageAction},
     privacy,
-    storage::StorageGate,
 };
 use anyhow::Result;
 
 pub async fn ingest_log(
     store: &Store,
     config: &Config,
-    storage_gate: &StorageGate,
+    local_classifier: &LocalClassifier,
     user_id: &str,
     text: &str,
     channel: &str,
 ) -> Result<IngestResult> {
     anyhow::ensure!(!text.trim().is_empty(), config.i18n.text("error.empty_log"));
-    let decision = match storage_gate.decide(text.trim()).await {
+    let decision = match local_classifier.decide(text.trim()).await {
         Ok(decision) => decision,
         Err(error) => {
             tracing::warn!(error=%error, "local classification failed");
@@ -63,7 +63,7 @@ pub async fn add_log(
     channel: &str,
     privacy_level: &str,
 ) -> Result<AddResult> {
-    let local = StorageGate::from_config(config).await?;
+    let local = LocalClassifier::from_config(config).await?;
     let analysis = if privacy_level == "no_upload" {
         None
     } else {
@@ -169,12 +169,35 @@ pub fn format_log(log: &Log, config: &Config) -> String {
     )
 }
 
+pub async fn delete_log_reference(
+    store: &Store,
+    config: &Config,
+    user_id: &str,
+    reference: &str,
+) -> Result<bool> {
+    if let Some(position) = reference.strip_prefix('-') {
+        let position: u32 = position
+            .parse()
+            .map_err(|_| anyhow::anyhow!(config.i18n.text("error.invalid_delete_position")))?;
+        anyhow::ensure!(
+            (1..=10).contains(&position),
+            config.i18n.text("error.invalid_delete_position")
+        );
+        let logs = store.recent_logs(user_id, position).await?;
+        return match logs.get((position - 1) as usize) {
+            Some(log) => store.delete_log(user_id, &log.id).await,
+            None => Ok(false),
+        };
+    }
+    store.delete_log(user_id, reference).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
+        local_llm::LocalClassifier,
         models::{Analysis, IngestResult, StorageAction, StorageDecision},
-        storage::StorageGate,
         test_support::{config as test_config, glm_response, mock_server},
     };
     use uuid::Uuid;
@@ -233,7 +256,7 @@ mod tests {
         );
         assert!(format_log(&pending.log, &config).contains("Pending analysis"));
 
-        let ignore = StorageGate::from_test_decision(StorageDecision {
+        let ignore = LocalClassifier::from_test_decision(StorageDecision {
             action: StorageAction::Ignore,
             confidence: 0.9,
             reason_code: "question".into(),
@@ -252,7 +275,7 @@ mod tests {
                 .unwrap(),
             IngestResult::Ignored { .. }
         ));
-        let ask = StorageGate::from_test_decision(StorageDecision {
+        let ask = LocalClassifier::from_test_decision(StorageDecision {
             action: StorageAction::Ask,
             confidence: 0.5,
             reason_code: "ambiguous".into(),
@@ -273,7 +296,7 @@ mod tests {
         ));
         assert_eq!(store.recent_logs(&user.id, 10).await.unwrap().len(), 2);
 
-        let store_gate = StorageGate::disabled();
+        let store_gate = LocalClassifier::disabled();
         assert!(matches!(
             ingest_log(
                 &store,
@@ -318,6 +341,48 @@ mod tests {
         assert_eq!(result.connections.len(), 1);
         handle.await.unwrap();
 
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn deletes_recent_log_by_bounded_position() {
+        let (store, path) = store().await;
+        let user = store.ensure_local_user("owner").await.unwrap();
+        for text in ["first", "second", "third"] {
+            store
+                .insert_log(&user.id, "terminal", text, "normal")
+                .await
+                .unwrap();
+        }
+        let config = test_config(
+            format!("sqlite://{}", path.display()),
+            "http://unused".into(),
+            None,
+        );
+        assert!(
+            delete_log_reference(&store, &config, &user.id, "-2")
+                .await
+                .unwrap()
+        );
+        let remaining = store.recent_logs(&user.id, 10).await.unwrap();
+        assert_eq!(remaining.len(), 2);
+        assert!(!remaining.iter().any(|log| log.text == "second"));
+        assert!(
+            delete_log_reference(&store, &config, &user.id, "-11")
+                .await
+                .is_err()
+        );
+        assert!(
+            delete_log_reference(&store, &config, &user.id, "-0")
+                .await
+                .is_err()
+        );
+        assert!(
+            !delete_log_reference(&store, &config, &user.id, "-3")
+                .await
+                .unwrap()
+        );
         drop(store);
         let _ = std::fs::remove_file(path);
     }

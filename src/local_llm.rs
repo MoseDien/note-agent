@@ -7,7 +7,7 @@ use reqwest::Client;
 use serde::Deserialize;
 
 #[derive(Clone)]
-pub struct StorageGate {
+pub struct LocalClassifier {
     http: Client,
     url: String,
     model: String,
@@ -41,7 +41,7 @@ struct LocalResult {
     importance: u8,
 }
 
-impl StorageGate {
+impl LocalClassifier {
     pub async fn from_config(config: &Config) -> Result<Self> {
         Ok(Self {
             http: Client::builder()
@@ -219,7 +219,7 @@ mod tests {
     async fn classifies_with_local_structured_output() {
         let (url, handle) = mock_server(vec![response("store")]).await;
         let config = config("sqlite::memory:".into(), url.clone(), None);
-        let decision = StorageGate::from_test_url(url, &config)
+        let decision = LocalClassifier::from_test_url(url, &config)
             .decide("I finished a task")
             .await
             .unwrap();
@@ -239,7 +239,7 @@ mod tests {
             let (url, handle) = mock_server(vec![body]).await;
             let config = config("sqlite::memory:".into(), url.clone(), None);
             assert!(
-                StorageGate::from_test_url(url, &config)
+                LocalClassifier::from_test_url(url, &config)
                     .decide("text")
                     .await
                     .is_err()

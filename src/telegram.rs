@@ -2,8 +2,8 @@ use crate::{
     agent,
     config::Config,
     db::Store,
+    local_llm::LocalClassifier,
     models::{AddResult, IngestResult},
-    storage::StorageGate,
 };
 use anyhow::{Context, Result};
 use secrecy::ExposeSecret;
@@ -15,15 +15,15 @@ pub async fn run(store: Store, config: Config) -> Result<()> {
         .clone()
         .context("missing TELOXIDE_TOKEN")?;
     let bot = Bot::new(token.expose_secret());
-    let storage_gate = StorageGate::from_config(&config).await?;
+    let local_classifier = LocalClassifier::from_config(&config).await?;
     tracing::info!("Telegram gateway started");
 
     teloxide::repl(bot, move |bot: Bot, msg: Message| {
         let store = store.clone();
         let config = config.clone();
-        let storage_gate = storage_gate.clone();
+        let local_classifier = local_classifier.clone();
         async move {
-            if let Err(error) = handle(&bot, &msg, &store, &config, &storage_gate).await {
+            if let Err(error) = handle(&bot, &msg, &store, &config, &local_classifier).await {
                 tracing::warn!(chat_id=%msg.chat.id, error=%error, "Telegram request failed");
                 let error_text = error.to_string();
                 bot.send_message(
@@ -46,7 +46,7 @@ async fn handle(
     msg: &Message,
     store: &Store,
     config: &Config,
-    storage_gate: &StorageGate,
+    local_classifier: &LocalClassifier,
 ) -> Result<()> {
     let text = match msg.text() {
         Some(text) => text.trim(),
@@ -121,7 +121,7 @@ async fn handle(
         }
         _ if text.starts_with("/delete ") => {
             let id = text.trim_start_matches("/delete ").trim();
-            let message = if store.delete_log(&user.id, id).await? {
+            let message = if agent::delete_log_reference(store, config, &user.id, id).await? {
                 config.i18n.text("telegram.deleted")
             } else {
                 config.i18n.text("telegram.not_found")
@@ -151,8 +151,15 @@ async fn handle(
                     agent::add_log(store, config, &user.id, content, "telegram", "normal").await?;
                 add_response(&result, config)
             } else {
-                match agent::ingest_log(store, config, storage_gate, &user.id, content, "telegram")
-                    .await?
+                match agent::ingest_log(
+                    store,
+                    config,
+                    local_classifier,
+                    &user.id,
+                    content,
+                    "telegram",
+                )
+                .await?
                 {
                     IngestResult::Stored { analysis, .. } => add_response(&analysis, config),
                     IngestResult::Ignored { .. } => config.i18n.text("telegram.storage_ignored"),
@@ -239,7 +246,7 @@ mod tests {
             "http://unused".into(),
             None,
         );
-        let gate = StorageGate::disabled();
+        let gate = LocalClassifier::disabled();
         let bot = Bot::new("123:test").set_api_url(Url::parse(&url).unwrap());
 
         handle(&bot, &message("/start", 42), &store, &config, &gate)

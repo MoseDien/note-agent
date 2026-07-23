@@ -51,7 +51,7 @@ cargo run -- gateway
 - `src/glm.rs`: GLM API transport and response validation
 - `src/db.rs`: SQLite persistence, migrations, FTS, and identity pairing
 - `src/privacy.rs`: local PII redaction
-- `src/storage.rs`: local Ollama storage decision and journal classification
+- `src/local_llm.rs`: local Ollama storage decision and journal classification
 - `src/i18n.rs`: runtime UI resource loading
 - `src/prompts.rs`: runtime prompt loading
 - `src/models.rs`: shared domain and API types
