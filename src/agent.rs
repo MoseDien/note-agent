@@ -2,8 +2,8 @@ use crate::{
     config::Config,
     db::Store,
     glm::GlmClient,
-    local_llm::LocalClassifier,
-    models::{AddResult, Analysis, ConnectionAnalysis, IngestResult, Log, StorageAction},
+    local_llm::LocalStorageGate,
+    models::{AddResult, ConnectionAnalysis, IngestResult, Log, StorageAction},
     privacy,
 };
 use anyhow::Result;
@@ -11,47 +11,25 @@ use anyhow::Result;
 pub async fn ingest_log(
     store: &Store,
     config: &Config,
-    local_classifier: &LocalClassifier,
+    storage_gate: &LocalStorageGate,
     user_id: &str,
     text: &str,
     channel: &str,
 ) -> Result<IngestResult> {
     anyhow::ensure!(!text.trim().is_empty(), config.i18n.text("error.empty_log"));
-    let decision = match local_classifier.decide(text.trim()).await {
+    let decision = match storage_gate.decide(text.trim()).await {
         Ok(decision) => decision,
         Err(error) => {
             tracing::warn!(error=%error, "local classification failed");
-            return Ok(IngestResult::Ask {
-                confidence: 0.0,
-                reason_code: "local_model_unavailable".into(),
-            });
+            return Ok(IngestResult::Ask);
         }
     };
     Ok(match decision.action {
         StorageAction::Store => IngestResult::Stored {
-            analysis: Box::new(
-                save_log(
-                    store,
-                    config,
-                    user_id,
-                    text,
-                    channel,
-                    "normal",
-                    Some(&decision.analysis),
-                )
-                .await?,
-            ),
-            confidence: decision.confidence,
-            reason_code: decision.reason_code,
+            result: Box::new(save_log(store, config, user_id, text, channel, "normal").await?),
         },
-        StorageAction::Ignore => IngestResult::Ignored {
-            confidence: decision.confidence,
-            reason_code: decision.reason_code,
-        },
-        StorageAction::Ask => IngestResult::Ask {
-            confidence: decision.confidence,
-            reason_code: decision.reason_code,
-        },
+        StorageAction::Ignore => IngestResult::Ignored,
+        StorageAction::Ask => IngestResult::Ask,
     })
 }
 
@@ -63,28 +41,7 @@ pub async fn add_log(
     channel: &str,
     privacy_level: &str,
 ) -> Result<AddResult> {
-    let local = LocalClassifier::from_config(config).await?;
-    let analysis = if privacy_level == "no_upload" {
-        None
-    } else {
-        match local.decide(text.trim()).await {
-            Ok(decision) => Some(decision.analysis),
-            Err(error) => {
-                tracing::warn!(error=%error, "forced log saved without local analysis");
-                None
-            }
-        }
-    };
-    save_log(
-        store,
-        config,
-        user_id,
-        text,
-        channel,
-        privacy_level,
-        analysis.as_ref(),
-    )
-    .await
+    save_log(store, config, user_id, text, channel, privacy_level).await
 }
 
 async fn save_log(
@@ -94,21 +51,16 @@ async fn save_log(
     text: &str,
     channel: &str,
     privacy_level: &str,
-    analysis: Option<&Analysis>,
 ) -> Result<AddResult> {
     anyhow::ensure!(!text.trim().is_empty(), config.i18n.text("error.empty_log"));
     anyhow::ensure!(
         matches!(privacy_level, "normal" | "no_upload"),
         config.i18n.text("error.invalid_privacy")
     );
-    let mut log = store
+    let log = store
         .insert_log(user_id, channel, text.trim(), privacy_level)
         .await?;
     let redacted = privacy::redact(text.trim(), &config.i18n);
-    if let Some(analysis) = analysis {
-        store.save_analysis(&log.id, analysis).await?;
-        log = store.get_log(&log.id).await?;
-    }
     Ok(AddResult {
         log,
         redacted_preview: redacted,
@@ -158,29 +110,12 @@ fn log_for_model(log: &Log, config: &Config) -> serde_json::Value {
     serde_json::json!({
         "id": log.id,
         "created_at": log.created_at,
-        "primary_tag": log.primary_tag,
-        "system_tags": log.system_tags_json,
-        "topic_tags": log.topic_tags_json,
-        "summary": log.summary.as_deref().map(|value| privacy::redact(value, &config.i18n)),
-        "topics": log.topics_json
+        "text": privacy::redact(&log.text, &config.i18n)
     })
 }
 
-pub fn format_log(log: &Log, config: &Config) -> String {
-    format!(
-        "[{}] {} · {}\n{}",
-        log.id,
-        log.created_at,
-        display_tag(log, config),
-        log.summary.as_deref().unwrap_or(&log.text)
-    )
-}
-
-pub fn display_tag(log: &Log, config: &Config) -> String {
-    log.primary_tag
-        .as_deref()
-        .map(|tag| config.i18n.tag(Some(tag)))
-        .unwrap_or_else(|| config.i18n.category(log.category.as_deref()))
+pub fn format_log(log: &Log, _config: &Config) -> String {
+    format!("[{}] {}\n{}", log.id, log.created_at, log.text)
 }
 
 pub async fn delete_log_reference(
@@ -210,8 +145,8 @@ pub async fn delete_log_reference(
 mod tests {
     use super::*;
     use crate::{
-        local_llm::LocalClassifier,
-        models::{Analysis, IngestResult, StorageAction, StorageDecision},
+        local_llm::LocalStorageGate,
+        models::{IngestResult, StorageAction, StorageDecision},
         test_support::{config as test_config, glm_response, mock_server},
     };
     use uuid::Uuid;
@@ -244,7 +179,6 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(private.log.analysis_status, "not_requested");
         assert!(private.redacted_preview.contains("[PHONE]"));
 
         let pending = add_log(
@@ -257,7 +191,6 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(pending.log.analysis_status, "pending");
         assert!(
             add_log(&store, &config, &user.id, "", "terminal", "normal")
                 .await
@@ -268,57 +201,29 @@ mod tests {
                 .await
                 .is_err()
         );
-        assert!(format_log(&pending.log, &config).contains("Pending analysis"));
+        assert!(format_log(&pending.log, &config).contains("ordinary log"));
 
-        let ignore = LocalClassifier::from_test_decision(StorageDecision {
+        let ignore = LocalStorageGate::from_test_decision(StorageDecision {
             action: StorageAction::Ignore,
-            confidence: 0.9,
-            reason_code: "question".into(),
-            analysis: Analysis {
-                primary_tag: "question".into(),
-                system_tags: vec!["question".into()],
-                topic_tags: vec![],
-                details: serde_json::json!({}),
-                category: "other".into(),
-                summary: "question".into(),
-                topics: vec![],
-                entities: vec![],
-                sentiment: "neutral".into(),
-                importance: 1,
-            },
         });
         assert!(matches!(
             ingest_log(&store, &config, &ignore, &user.id, "a question", "terminal")
                 .await
                 .unwrap(),
-            IngestResult::Ignored { .. }
+            IngestResult::Ignored
         ));
-        let ask = LocalClassifier::from_test_decision(StorageDecision {
+        let ask = LocalStorageGate::from_test_decision(StorageDecision {
             action: StorageAction::Ask,
-            confidence: 0.5,
-            reason_code: "ambiguous".into(),
-            analysis: Analysis {
-                primary_tag: "question".into(),
-                system_tags: vec!["question".into()],
-                topic_tags: vec![],
-                details: serde_json::json!({}),
-                category: "other".into(),
-                summary: "ambiguous".into(),
-                topics: vec![],
-                entities: vec![],
-                sentiment: "neutral".into(),
-                importance: 1,
-            },
         });
         assert!(matches!(
             ingest_log(&store, &config, &ask, &user.id, "ambiguous", "terminal")
                 .await
                 .unwrap(),
-            IngestResult::Ask { .. }
+            IngestResult::Ask
         ));
         assert_eq!(store.recent_logs(&user.id, 10).await.unwrap().len(), 2);
 
-        let store_gate = LocalClassifier::disabled();
+        let store_gate = LocalStorageGate::disabled();
         assert!(matches!(
             ingest_log(
                 &store,

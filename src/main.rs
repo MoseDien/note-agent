@@ -14,7 +14,7 @@ mod test_support;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use db::Store;
-use local_llm::LocalClassifier;
+use local_llm::LocalStorageGate;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -30,7 +30,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Save and analyze a daily log.
+    /// Save a daily log without a model decision.
     Add {
         text: String,
         #[arg(long, value_enum, default_value_t = PrivacyArg::Normal)]
@@ -98,8 +98,8 @@ async fn main() -> Result<()> {
     let user = store.ensure_local_user(&config.local_user).await?;
     match cli.command {
         None => {
-            let local_classifier = LocalClassifier::from_config(&config).await?;
-            interactive(&store, &config, &local_classifier, &user.id).await?
+            let storage_gate = LocalStorageGate::from_config(&config).await?;
+            interactive(&store, &config, &storage_gate, &user.id).await?
         }
         Some(Command::Add { text, privacy }) => {
             let result = agent::add_log(
@@ -115,13 +115,7 @@ async fn main() -> Result<()> {
         }
         Some(Command::Recent { limit }) => {
             for log in store.recent_logs(&user.id, limit).await? {
-                println!(
-                    "[{}] {} · {}\n{}\n",
-                    log.id,
-                    log.created_at,
-                    agent::display_tag(&log, &config),
-                    log.summary.as_deref().unwrap_or(&log.text)
-                );
+                println!("{}\n", agent::format_log(&log, &config));
             }
         }
         Some(Command::Connections { limit }) => {
@@ -129,10 +123,10 @@ async fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&result)?);
         }
         Some(Command::Decide { text }) => {
-            let local_classifier = LocalClassifier::from_config(&config).await?;
+            let storage_gate = LocalStorageGate::from_config(&config).await?;
             println!(
                 "{}",
-                serde_json::to_string_pretty(&local_classifier.decide(&text).await?)?
+                serde_json::to_string_pretty(&storage_gate.decide(&text).await?)?
             );
         }
         Some(Command::Delete { id }) => {
@@ -177,7 +171,7 @@ async fn main() -> Result<()> {
 async fn interactive(
     store: &Store,
     config: &config::Config,
-    local_classifier: &LocalClassifier,
+    storage_gate: &LocalStorageGate,
     user_id: &str,
 ) -> Result<()> {
     use std::io::Write;
@@ -222,7 +216,7 @@ async fn interactive(
             text => println!(
                 "{}",
                 serde_json::to_string_pretty(
-                    &agent::ingest_log(store, config, local_classifier, user_id, text, "terminal")
+                    &agent::ingest_log(store, config, storage_gate, user_id, text, "terminal")
                         .await?
                 )?
             ),

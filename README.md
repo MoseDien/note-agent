@@ -1,6 +1,6 @@
 # Daily Agent MVP
 
-一个使用 Rust 构建的私人日志 Agent。Terminal 与 Telegram 共用 SQLite memory，本机 Qwen 负责所有日常输入的存储判断、分类和总结；GLM 只用于用户明确触发的高级分析。
+一个使用 Rust 构建的私人日志 Agent。Terminal 与 Telegram 共用 SQLite memory，本机 Qwen 只负责判断日常输入是否需要保存；GLM 只用于用户明确触发的高级分析。
 
 > SQLite 当前明文保存原文，不要把本项目直接部署成公开多用户服务。
 
@@ -9,12 +9,12 @@
 ```text
 普通输入
   → 本机 Ollama / qwen3:1.7b
-  → store：保存原文、本地摘要与多标签
+  → store：保存原文
   → ignore：不保存
   → ask：请求用户确认
 
 /connections 等高级命令
-  → 本地检索摘要
+  → 本地检索少量候选记录
   → 本地脱敏
   → GLM 高级分析
 ```
@@ -36,9 +36,9 @@ Telegram 连接问题怎么解决？
 
 因此当前改用本机 Ollama 运行 `qwen3:1.7b`：
 
-- Qwen 能判断陈述、提问、计划、感受和操作指令等不同意图。
-- 一次本地调用同时完成存储决策、分类、摘要、主题、实体、情绪和重要度。
-- JSON Schema 限制输出字段、枚举、长度和数量，Rust 端再次验证。
+- Qwen 能区分个人记忆与知识问题、临时请求、命令和寒暄。
+- 本地调用只返回 `store`、`ignore` 或 `ask`。
+- JSON Schema 限制输出字段，Rust 端再次验证。
 - 中文、英文和中英混合使用同一个模型，不依赖部署语言。
 - 用户普通输入只进入本机 Ollama，不发送给 GLM。
 - 本地模型失败时返回 `ask`，不会为了可用性而回退到远程模型。
@@ -116,13 +116,13 @@ TELOXIDE_TOKEN=...
 `DAILY_AGENT_LOCALE` 只控制界面和提示词语言。Qwen 支持中文、英文和混合输入。提示词位于：
 
 ```text
-resources/prompts/zh-CN/
-resources/prompts/en-US/
+resources/prompts/zh-CN/storage-decision.system.md
+resources/prompts/en-US/storage-decision.system.md
 ```
 
 ## Terminal
 
-测试本地分类但不保存：
+测试本地存储判断但不保存：
 
 ```bash
 target/release/daily-agent decide "今天完成了 Telegram 接入"
@@ -172,8 +172,8 @@ target/release/daily-agent gateway
 Telegram 命令：
 
 ```text
-普通文字       本地 Qwen 判断、分类和总结
-/log 内容      强制保存并由本地 Qwen 分析
+普通文字       本地 Qwen 只判断是否保存
+/log 内容      不经模型判断，强制保存
 /private 内容  强制保存，不调用模型
 /connections   调用 GLM 进行高级联系分析
 /recent        查看最近记录
@@ -182,40 +182,21 @@ Telegram 命令：
 /export        导出数据
 ```
 
-保存成功时 Telegram 只显示完整记录 ID 的前 4 位和分类，不重复用户输入。数据库仍保留完整 ID、原文和分析结果。
+保存成功时 Telegram 只显示完整记录 ID 的前 4 位，不重复用户输入。数据库保留完整 ID 和原文。
 
-## 本地标签与分类结果
+## 本地存储判断
 
 Ollama 使用 JSON Schema 返回：
 
 ```json
 {
-  "storage_action": "store",
-  "confidence": 0.94,
-  "reason_code": "personal_event",
-  "primary_tag": "activity",
-  "system_tags": ["activity", "work", "project"],
-  "topic_tags": ["telegram", "daily-agent"],
-  "details": {
-    "project": "Daily Agent"
-  },
-  "summary": "完成了 Telegram 接入",
-  "entities": [],
-  "sentiment": "positive",
-  "importance": 4
+  "storage_action": "store"
 }
 ```
 
-一条记录可以有多个标签：
+Qwen 不再进行分类、打标签、总结、实体提取、情绪判断或重要度评分。短输入只回答一个问题：它是否属于值得保存的用户个人记忆。
 
-- `primary_tag` 是一个主要记忆类型，取值为 `reflection`、`idea`、`decision`、`plan`、`activity`、`experience`、`fact`、`reminder`、`lesson`、`preference`、`commitment` 或 `question`。
-- `system_tags` 是受控标签，可表达工作、家庭、关系、健康、心情、睡眠、症状、生日、截止日期等多个维度。
-- `topic_tags` 是 Qwen 从内容中提取的开放主题，最多 8 个。
-- `details` 保存日期、对象、项目等结构化细节，为将来的提醒和联系分析准备；它目前不会自动创建定时提醒。
-
-标签、摘要、情绪和实体均由本地 Qwen 生成。它们是便于检索和分析的模型元数据，不应被当作未经核实的事实。
-
-旧数据库会在程序启动时自动增加这些字段，并将旧 `category/topics` 保守映射到新标签。migration 可重复执行，不会覆盖已经迁移或后来更新的标签；旧字段暂时保留用于兼容。
+旧数据库中的分类和标签列不会被破坏性删除，但运行时和新导出只读取核心日志字段；新记录不会继续填充或展示分类数据。
 
 ## 隐私
 
@@ -223,7 +204,7 @@ Ollama 使用 JSON Schema 返回：
 - 普通输入只发送到 `127.0.0.1` 的 Ollama。
 - 普通输入代码路径不会调用 GLM。
 - `/private` 日志及其元数据永远不会发送给 GLM。
-- 高级分析优先发送本地摘要，不发送完整历史原文。
+- 用户明确调用高级分析时，只选取少量候选记录，脱敏后发送；不会发送全部历史。
 - 调用 GLM 前再次遮盖手机号、邮箱、身份证、银行卡和 IPv4。
 - Telegram 消息仍会经过 Telegram 服务器。
 - 不要输入密码、API key 等高度敏感信息。

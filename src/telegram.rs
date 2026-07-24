@@ -2,7 +2,7 @@ use crate::{
     agent,
     config::Config,
     db::Store,
-    local_llm::LocalClassifier,
+    local_llm::LocalStorageGate,
     models::{AddResult, IngestResult},
 };
 use anyhow::{Context, Result};
@@ -15,15 +15,15 @@ pub async fn run(store: Store, config: Config) -> Result<()> {
         .clone()
         .context("missing TELOXIDE_TOKEN")?;
     let bot = Bot::new(token.expose_secret());
-    let local_classifier = LocalClassifier::from_config(&config).await?;
+    let storage_gate = LocalStorageGate::from_config(&config).await?;
     tracing::info!("Telegram gateway started");
 
     teloxide::repl(bot, move |bot: Bot, msg: Message| {
         let store = store.clone();
         let config = config.clone();
-        let local_classifier = local_classifier.clone();
+        let storage_gate = storage_gate.clone();
         async move {
-            if let Err(error) = handle(&bot, &msg, &store, &config, &local_classifier).await {
+            if let Err(error) = handle(&bot, &msg, &store, &config, &storage_gate).await {
                 tracing::warn!(chat_id=%msg.chat.id, error=%error, "Telegram request failed");
                 let error_text = error.to_string();
                 bot.send_message(
@@ -46,7 +46,7 @@ async fn handle(
     msg: &Message,
     store: &Store,
     config: &Config,
-    local_classifier: &LocalClassifier,
+    storage_gate: &LocalStorageGate,
 ) -> Result<()> {
     let text = match msg.text() {
         Some(text) => text.trim(),
@@ -151,19 +151,12 @@ async fn handle(
                     agent::add_log(store, config, &user.id, content, "telegram", "normal").await?;
                 add_response(&result, config)
             } else {
-                match agent::ingest_log(
-                    store,
-                    config,
-                    local_classifier,
-                    &user.id,
-                    content,
-                    "telegram",
-                )
-                .await?
+                match agent::ingest_log(store, config, storage_gate, &user.id, content, "telegram")
+                    .await?
                 {
-                    IngestResult::Stored { analysis, .. } => add_response(&analysis, config),
-                    IngestResult::Ignored { .. } => config.i18n.text("telegram.storage_ignored"),
-                    IngestResult::Ask { .. } => config.i18n.text("telegram.storage_ask"),
+                    IngestResult::Stored { result, .. } => add_response(&result, config),
+                    IngestResult::Ignored => config.i18n.text("telegram.storage_ignored"),
+                    IngestResult::Ask => config.i18n.text("telegram.storage_ask"),
                 }
             };
             bot.send_message(msg.chat.id, response).await?
@@ -173,31 +166,8 @@ async fn handle(
 }
 
 fn add_response(result: &AddResult, config: &Config) -> String {
-    let mut status = if result.log.analysis_status == "complete" {
-        agent::display_tag(&result.log, config)
-    } else if result.log.analysis_status == "not_requested" {
-        config.i18n.text("telegram.private_saved")
-    } else {
-        config.i18n.text("telegram.analysis_pending")
-    };
-    if !result.connections.is_empty() {
-        status.push_str(&format!(
-            "\n\n{}\n",
-            config.i18n.text("telegram.connections_found")
-        ));
-        status.push_str(
-            &result
-                .connections
-                .iter()
-                .map(|item| format!("• {}", item.description))
-                .collect::<Vec<_>>()
-                .join("\n"),
-        );
-    }
     let short_id: String = result.log.id.chars().take(4).collect();
-    config
-        .i18n
-        .format("telegram.saved", &[("id", &short_id), ("status", &status)])
+    config.i18n.format("telegram.saved", &[("id", &short_id)])
 }
 
 fn truncate(value: &str, config: &Config) -> String {
@@ -246,7 +216,7 @@ mod tests {
             "http://unused".into(),
             None,
         );
-        let gate = LocalClassifier::disabled();
+        let gate = LocalStorageGate::disabled();
         let bot = Bot::new("123:test").set_api_url(Url::parse(&url).unwrap());
 
         handle(&bot, &message("/start", 42), &store, &config, &gate)

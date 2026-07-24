@@ -1,7 +1,7 @@
-use crate::models::{Analysis, Connection, Log, User};
+use crate::models::{Connection, Log, User};
 use anyhow::{Context, Result};
 use chrono::{Duration, Utc};
-use sqlx::{Row, SqlitePool, sqlite::SqliteConnectOptions};
+use sqlx::{SqlitePool, sqlite::SqliteConnectOptions};
 use std::str::FromStr;
 use uuid::Uuid;
 
@@ -24,7 +24,7 @@ impl Store {
         for sql in [
             "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, local_name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL)",
             "CREATE TABLE IF NOT EXISTS channel_identities (user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, channel TEXT NOT NULL, external_id TEXT NOT NULL, UNIQUE(channel, external_id))",
-            "CREATE TABLE IF NOT EXISTS logs (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, channel TEXT NOT NULL, text TEXT NOT NULL, privacy_level TEXT NOT NULL DEFAULT 'normal', analysis_status TEXT NOT NULL DEFAULT 'pending', category TEXT, summary TEXT, topics_json TEXT, primary_tag TEXT, system_tags_json TEXT NOT NULL DEFAULT '[]', topic_tags_json TEXT NOT NULL DEFAULT '[]', details_json TEXT NOT NULL DEFAULT '{}', tag_schema_version INTEGER NOT NULL DEFAULT 1, sentiment TEXT, importance INTEGER, created_at TEXT NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS logs (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, channel TEXT NOT NULL, text TEXT NOT NULL, privacy_level TEXT NOT NULL DEFAULT 'normal', created_at TEXT NOT NULL)",
             "CREATE INDEX IF NOT EXISTS logs_user_created ON logs(user_id, created_at DESC)",
             "CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(log_id UNINDEXED, user_id UNINDEXED, text, summary, topics)",
             "CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL, name TEXT NOT NULL, UNIQUE(user_id, kind, name))",
@@ -35,72 +35,6 @@ impl Store {
         ] {
             sqlx::query(sql).execute(&self.pool).await?;
         }
-        for (name, definition) in [
-            ("primary_tag", "TEXT"),
-            ("system_tags_json", "TEXT NOT NULL DEFAULT '[]'"),
-            ("topic_tags_json", "TEXT NOT NULL DEFAULT '[]'"),
-            ("details_json", "TEXT NOT NULL DEFAULT '{}'"),
-            ("tag_schema_version", "INTEGER NOT NULL DEFAULT 0"),
-        ] {
-            self.ensure_log_column(name, definition).await?;
-        }
-        for (legacy, code) in [
-            ("工作", "work"),
-            ("学习", "study"),
-            ("健康", "health"),
-            ("关系", "relationships"),
-            ("财务", "finance"),
-            ("灵感", "inspiration"),
-            ("情绪", "emotions"),
-            ("生活", "life"),
-            ("其他", "other"),
-        ] {
-            sqlx::query("UPDATE logs SET category=? WHERE category=?")
-                .bind(code)
-                .bind(legacy)
-                .execute(&self.pool)
-                .await?;
-        }
-        sqlx::query(
-            "UPDATE logs SET
-                primary_tag=CASE category
-                    WHEN 'work' THEN 'activity' WHEN 'study' THEN 'experience'
-                    WHEN 'health' THEN 'experience' WHEN 'relationships' THEN 'reflection'
-                    WHEN 'finance' THEN 'activity' WHEN 'inspiration' THEN 'idea'
-                    WHEN 'emotions' THEN 'reflection' WHEN 'life' THEN 'experience'
-                    ELSE NULL END,
-                system_tags_json=CASE category
-                    WHEN 'work' THEN '[\"activity\",\"work\"]'
-                    WHEN 'study' THEN '[\"experience\",\"learning\"]'
-                    WHEN 'health' THEN '[\"experience\",\"health\"]'
-                    WHEN 'relationships' THEN '[\"reflection\",\"relationship\"]'
-                    WHEN 'finance' THEN '[\"activity\",\"finance\"]'
-                    WHEN 'inspiration' THEN '[\"idea\"]'
-                    WHEN 'emotions' THEN '[\"reflection\",\"wellbeing\",\"mood\"]'
-                    WHEN 'life' THEN '[\"experience\",\"self\"]'
-                    ELSE '[]' END,
-                topic_tags_json=COALESCE(topics_json,'[]'),
-                tag_schema_version=1
-             WHERE tag_schema_version=0",
-        )
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    async fn ensure_log_column(&self, name: &str, definition: &str) -> Result<()> {
-        let columns = sqlx::query("PRAGMA table_info(logs)")
-            .fetch_all(&self.pool)
-            .await?;
-        if columns
-            .iter()
-            .any(|column| column.get::<String, _>("name") == name)
-        {
-            return Ok(());
-        }
-        sqlx::query(&format!("ALTER TABLE logs ADD COLUMN {name} {definition}"))
-            .execute(&self.pool)
-            .await?;
         Ok(())
     }
 
@@ -139,98 +73,22 @@ impl Store {
             channel: channel.into(),
             text: text.into(),
             privacy_level: privacy_level.into(),
-            analysis_status: if privacy_level == "no_upload" {
-                "not_requested".into()
-            } else {
-                "pending".into()
-            },
-            category: None,
-            summary: None,
-            topics_json: None,
-            primary_tag: None,
-            system_tags_json: "[]".into(),
-            topic_tags_json: "[]".into(),
-            details_json: "{}".into(),
-            tag_schema_version: 1,
-            sentiment: None,
-            importance: None,
             created_at: Utc::now().to_rfc3339(),
         };
-        sqlx::query("INSERT INTO logs(id,user_id,channel,text,privacy_level,analysis_status,created_at) VALUES(?,?,?,?,?,?,?)")
-            .bind(&log.id).bind(user_id).bind(channel).bind(text).bind(&log.privacy_level).bind(&log.analysis_status).bind(&log.created_at).execute(&self.pool).await?;
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("INSERT INTO logs(id,user_id,channel,text,privacy_level,created_at) VALUES(?,?,?,?,?,?)")
+            .bind(&log.id).bind(user_id).bind(channel).bind(text).bind(&log.privacy_level).bind(&log.created_at).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO logs_fts(log_id,user_id,text,summary,topics) VALUES(?,?,?,'','')")
+            .bind(&log.id)
+            .bind(user_id)
+            .bind(text)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
         Ok(log)
     }
 
-    pub async fn save_analysis(&self, log_id: &str, analysis: &Analysis) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
-        let topics = serde_json::to_string(&analysis.topics)?;
-        let system_tags = serde_json::to_string(&analysis.system_tags)?;
-        let topic_tags = serde_json::to_string(&analysis.topic_tags)?;
-        let details = serde_json::to_string(&analysis.details)?;
-        sqlx::query("UPDATE logs SET analysis_status='complete',category=?,summary=?,topics_json=?,primary_tag=?,system_tags_json=?,topic_tags_json=?,details_json=?,tag_schema_version=1,sentiment=?,importance=? WHERE id=?")
-            .bind(&analysis.category).bind(&analysis.summary).bind(&topics)
-            .bind(&analysis.primary_tag).bind(&system_tags).bind(&topic_tags).bind(&details)
-            .bind(&analysis.sentiment).bind(analysis.importance as i64).bind(log_id).execute(&mut *tx).await?;
-        let row = sqlx::query("SELECT user_id,text FROM logs WHERE id=?")
-            .bind(log_id)
-            .fetch_one(&mut *tx)
-            .await?;
-        let user_id: String = row.get("user_id");
-        let text: String = row.get("text");
-        sqlx::query("DELETE FROM logs_fts WHERE log_id=?")
-            .bind(log_id)
-            .execute(&mut *tx)
-            .await?;
-        sqlx::query("INSERT INTO logs_fts(log_id,user_id,text,summary,topics) VALUES(?,?,?,?,?)")
-            .bind(log_id)
-            .bind(&user_id)
-            .bind(text)
-            .bind(&analysis.summary)
-            .bind(
-                analysis
-                    .system_tags
-                    .iter()
-                    .chain(&analysis.topic_tags)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            )
-            .execute(&mut *tx)
-            .await?;
-        for entity in &analysis.entities {
-            let entity_id = Uuid::new_v4().to_string();
-            sqlx::query("INSERT OR IGNORE INTO entities(id,user_id,kind,name) VALUES(?,?,?,?)")
-                .bind(&entity_id)
-                .bind(&user_id)
-                .bind(&entity.kind)
-                .bind(&entity.name)
-                .execute(&mut *tx)
-                .await?;
-            let existing: String =
-                sqlx::query_scalar("SELECT id FROM entities WHERE user_id=? AND kind=? AND name=?")
-                    .bind(&user_id)
-                    .bind(&entity.kind)
-                    .bind(&entity.name)
-                    .fetch_one(&mut *tx)
-                    .await?;
-            sqlx::query("INSERT OR IGNORE INTO entity_mentions(entity_id,log_id) VALUES(?,?)")
-                .bind(existing)
-                .bind(log_id)
-                .execute(&mut *tx)
-                .await?;
-        }
-        tx.commit().await?;
-        Ok(())
-    }
-
     #[cfg_attr(not(test), allow(dead_code))]
-    pub async fn mark_analysis_failed(&self, log_id: &str) -> Result<()> {
-        sqlx::query("UPDATE logs SET analysis_status='failed' WHERE id=?")
-            .bind(log_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
     pub async fn get_log(&self, id: &str) -> Result<Log> {
         Ok(sqlx::query_as("SELECT * FROM logs WHERE id=?")
             .bind(id)
@@ -399,7 +257,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn persists_analysis_searches_and_cleans_derived_data() {
+    async fn indexes_plain_logs_and_cleans_derived_data() {
         let (store, path) = test_store().await;
         let user = store.ensure_local_user("analyst").await.unwrap();
         let first = store
@@ -410,36 +268,8 @@ mod tests {
             .insert_log(&user.id, "telegram", "Rust memory design", "normal")
             .await
             .unwrap();
-        let analysis = Analysis {
-            primary_tag: "activity".into(),
-            system_tags: vec!["activity".into(), "work".into()],
-            topic_tags: vec!["rust".into(), "privacy".into()],
-            details: serde_json::json!({"project":"Daily Agent"}),
-            category: "work".into(),
-            summary: "Rust project work".into(),
-            topics: vec!["Rust".into(), "privacy".into()],
-            entities: vec![crate::models::EntityMention {
-                kind: "project".into(),
-                name: "Daily Agent".into(),
-            }],
-            sentiment: "positive".into(),
-            importance: 4,
-        };
-        store.save_analysis(&first.id, &analysis).await.unwrap();
-        store.save_analysis(&second.id, &analysis).await.unwrap();
-
         let loaded = store.get_log(&first.id).await.unwrap();
-        assert_eq!(loaded.category.as_deref(), Some("work"));
-        assert_eq!(loaded.primary_tag.as_deref(), Some("activity"));
-        assert_eq!(
-            serde_json::from_str::<Vec<String>>(&loaded.system_tags_json).unwrap(),
-            vec!["activity", "work"]
-        );
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&loaded.details_json).unwrap(),
-            serde_json::json!({"project":"Daily Agent"})
-        );
-        assert_eq!(loaded.tag_schema_version, 1);
+        assert_eq!(loaded.text, "Rust privacy project");
         assert_eq!(store.export_user(&user.id).await.unwrap().len(), 2);
         let matches = store
             .search_candidates(&user.id, "Rust privacy", Some(&second.id), 5)
@@ -462,46 +292,13 @@ mod tests {
             .unwrap();
         assert!(store.delete_log(&user.id, &first.id).await.unwrap());
         assert!(store.get_log(&first.id).await.is_err());
-        store.mark_analysis_failed(&second.id).await.unwrap();
-        assert_eq!(
-            store.get_log(&second.id).await.unwrap().analysis_status,
-            "failed"
-        );
 
         store.pool.close().await;
         let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]
-    async fn migrates_legacy_categories_and_search_falls_back() {
-        let (store, path) = test_store().await;
-        let user = store.ensure_local_user("legacy").await.unwrap();
-        let log = store
-            .insert_log(&user.id, "terminal", "legacy", "normal")
-            .await
-            .unwrap();
-        sqlx::query("UPDATE logs SET category='工作' WHERE id=?")
-            .bind(&log.id)
-            .execute(&store.pool)
-            .await
-            .unwrap();
-        store.migrate().await.unwrap();
-        assert_eq!(
-            store.get_log(&log.id).await.unwrap().category.as_deref(),
-            Some("work")
-        );
-        let fallback = store
-            .search_candidates(&user.id, "x", None, 5)
-            .await
-            .unwrap();
-        assert_eq!(fallback.len(), 1);
-
-        store.pool.close().await;
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[tokio::test]
-    async fn adds_and_backfills_tag_columns_on_a_legacy_database() {
+    async fn reads_core_logs_from_a_legacy_database() {
         let path = std::env::temp_dir().join(format!("daily-agent-legacy-{}.db", Uuid::new_v4()));
         let store = Store::connect(&format!("sqlite://{}", path.display()))
             .await
@@ -525,10 +322,6 @@ mod tests {
                 privacy_level TEXT NOT NULL DEFAULT 'normal',
                 analysis_status TEXT NOT NULL DEFAULT 'pending',
                 category TEXT,
-                summary TEXT,
-                topics_json TEXT,
-                sentiment TEXT,
-                importance INTEGER,
                 created_at TEXT NOT NULL
             )",
         )
@@ -543,8 +336,8 @@ mod tests {
         .unwrap();
         sqlx::query(
             "INSERT INTO logs(
-                id,user_id,channel,text,category,topics_json,created_at
-             ) VALUES('l','u','terminal','legacy','情绪','[\"sleep\"]','2026-01-01T00:00:00Z')",
+                id,user_id,channel,text,category,created_at
+             ) VALUES('l','u','terminal','legacy','情绪','2026-01-01T00:00:00Z')",
         )
         .execute(&store.pool)
         .await
@@ -552,26 +345,9 @@ mod tests {
 
         store.migrate().await.unwrap();
         store.migrate().await.unwrap();
-        let migrated = store.get_log("l").await.unwrap();
-        assert_eq!(migrated.category.as_deref(), Some("emotions"));
-        assert_eq!(migrated.primary_tag.as_deref(), Some("reflection"));
-        assert_eq!(
-            serde_json::from_str::<Vec<String>>(&migrated.system_tags_json).unwrap(),
-            vec!["reflection", "wellbeing", "mood"]
-        );
-        assert_eq!(migrated.topic_tags_json, "[\"sleep\"]");
-        assert_eq!(migrated.details_json, "{}");
-        assert_eq!(migrated.tag_schema_version, 1);
-
-        sqlx::query("UPDATE logs SET system_tags_json='[\"custom\"]' WHERE id='l'")
-            .execute(&store.pool)
-            .await
-            .unwrap();
-        store.migrate().await.unwrap();
-        assert_eq!(
-            store.get_log("l").await.unwrap().system_tags_json,
-            "[\"custom\"]"
-        );
+        let legacy = store.get_log("l").await.unwrap();
+        assert_eq!(legacy.text, "legacy");
+        assert_eq!(legacy.privacy_level, "normal");
 
         store.pool.close().await;
         let _ = std::fs::remove_file(path);

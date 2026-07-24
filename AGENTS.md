@@ -47,7 +47,7 @@ cargo run -- gateway
 
 - `src/main.rs`: CLI and Terminal entry point
 - `src/telegram.rs`: Telegram adapter only; keep domain logic out of it
-- `src/agent.rs`: log analysis and connection workflow
+- `src/agent.rs`: storage-decision and connection workflow
 - `src/glm.rs`: GLM API transport and response validation
 - `src/db.rs`: SQLite persistence, migrations, FTS, and identity pairing
 - `src/privacy.rs`: local PII redaction
@@ -57,7 +57,7 @@ cargo run -- gateway
 - `src/models.rs`: shared domain and API types
 - `src/config.rs`: environment-based configuration
 
-Terminal and Telegram must call the same agent and storage functions. Do not duplicate analysis or memory logic in channel adapters.
+Terminal and Telegram must call the same agent and storage functions. Do not duplicate storage-decision or memory logic in channel adapters.
 
 ## Internationalization
 
@@ -109,13 +109,13 @@ data/*.db-*
 
 ## Model routing
 
-All ordinary input storage decisions, tags, structured details, summaries, entities, sentiment, and importance must use the configured local Ollama model. GLM may only be invoked by explicit advanced commands or user-configured scheduled tasks. A local model outage must return `ask` or preserve an explicit `/log`; it must never trigger a remote fallback.
+The configured local Ollama model has exactly one ordinary-input responsibility: decide `store`, `ignore`, or `ask`. It must not classify, tag, summarize, extract entities, infer sentiment, or score importance. GLM may only be invoked by explicit advanced commands or user-configured scheduled tasks. A local model outage must return `ask` or preserve an explicit `/log`; it must never trigger a remote fallback.
 
 ## GLM integration
 
 The first version uses GLM as its only advanced provider and one configured model. Keep the endpoint and model configurable through environment variables.
 
-Require JSON responses and validate stable primary/system tags, sentiment, and connection codes before persistence. Treat topic tags and structured details as model metadata, not verified facts. Do not trust model-provided source log IDs; verify that every referenced ID belongs to the current user's supplied candidate set.
+Require JSON responses and validate the storage action and connection codes. Do not trust model-provided source log IDs; verify that every referenced ID belongs to the current user's supplied candidate set.
 
 Do not send the entire journal history to GLM. Use local retrieval to select a small candidate set and send only the required redacted text or summaries.
 
@@ -125,7 +125,7 @@ Migrations currently run from `Store::migrate`. New migrations must be idempoten
 
 Keep foreign keys enabled and preserve user isolation. When changing localized legacy values, migrate them to stable language-neutral codes.
 
-Logs use one `primary_tag`, multiple controlled `system_tags`, multiple open `topic_tags`, and a JSON `details` object. Keep legacy `category` and `topics_json` readable until an explicit cleanup migration is approved. Tag backfills must be conservative, versioned, and must not overwrite already migrated user data.
+Legacy classification and tag columns may remain physically present in an existing SQLite file, but the runtime and new exports use only core log fields. New logs must not populate or display legacy classification data. Removing legacy columns requires a separately approved destructive migration.
 
 ## Testing expectations
 
