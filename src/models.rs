@@ -18,6 +18,11 @@ pub struct Log {
     pub category: Option<String>,
     pub summary: Option<String>,
     pub topics_json: Option<String>,
+    pub primary_tag: Option<String>,
+    pub system_tags_json: String,
+    pub topic_tags_json: String,
+    pub details_json: String,
+    pub tag_schema_version: i64,
     pub sentiment: Option<String>,
     pub importance: Option<i64>,
     pub created_at: String,
@@ -25,6 +30,14 @@ pub struct Log {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Analysis {
+    pub primary_tag: String,
+    #[serde(default)]
+    pub system_tags: Vec<String>,
+    #[serde(default)]
+    pub topic_tags: Vec<String>,
+    #[serde(default = "empty_object")]
+    pub details: serde_json::Value,
+    // Legacy fields retained during the compatibility migration.
     pub category: String,
     pub summary: String,
     #[serde(default)]
@@ -33,6 +46,10 @@ pub struct Analysis {
     pub entities: Vec<EntityMention>,
     pub sentiment: String,
     pub importance: u8,
+}
+
+fn empty_object() -> serde_json::Value {
+    serde_json::json!({})
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

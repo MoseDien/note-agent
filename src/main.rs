@@ -119,7 +119,7 @@ async fn main() -> Result<()> {
                     "[{}] {} · {}\n{}\n",
                     log.id,
                     log.created_at,
-                    config.i18n.category(log.category.as_deref()),
+                    agent::display_tag(&log, &config),
                     log.summary.as_deref().unwrap_or(&log.text)
                 );
             }

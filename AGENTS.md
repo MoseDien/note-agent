@@ -109,13 +109,13 @@ data/*.db-*
 
 ## Model routing
 
-All ordinary input classification, summary, topics, entities, sentiment, and importance must use the configured local Ollama model. GLM may only be invoked by explicit advanced commands or user-configured scheduled tasks. A local model outage must return `ask` or preserve an explicit `/log`; it must never trigger a remote fallback.
+All ordinary input storage decisions, tags, structured details, summaries, entities, sentiment, and importance must use the configured local Ollama model. GLM may only be invoked by explicit advanced commands or user-configured scheduled tasks. A local model outage must return `ask` or preserve an explicit `/log`; it must never trigger a remote fallback.
 
 ## GLM integration
 
 The first version uses GLM as its only advanced provider and one configured model. Keep the endpoint and model configurable through environment variables.
 
-Require JSON responses and validate stable category, sentiment, and connection codes before persistence. Do not trust model-provided source log IDs; verify that every referenced ID belongs to the current user's supplied candidate set.
+Require JSON responses and validate stable primary/system tags, sentiment, and connection codes before persistence. Treat topic tags and structured details as model metadata, not verified facts. Do not trust model-provided source log IDs; verify that every referenced ID belongs to the current user's supplied candidate set.
 
 Do not send the entire journal history to GLM. Use local retrieval to select a small candidate set and send only the required redacted text or summaries.
 
@@ -124,6 +124,8 @@ Do not send the entire journal history to GLM. Use local retrieval to select a s
 Migrations currently run from `Store::migrate`. New migrations must be idempotent because they execute at every startup.
 
 Keep foreign keys enabled and preserve user isolation. When changing localized legacy values, migrate them to stable language-neutral codes.
+
+Logs use one `primary_tag`, multiple controlled `system_tags`, multiple open `topic_tags`, and a JSON `details` object. Keep legacy `category` and `topics_json` readable until an explicit cleanup migration is approved. Tag backfills must be conservative, versioned, and must not overwrite already migrated user data.
 
 ## Testing expectations
 

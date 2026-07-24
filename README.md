@@ -9,7 +9,7 @@
 ```text
 普通输入
   → 本机 Ollama / qwen3:1.7b
-  → store：保存原文及本地分析
+  → store：保存原文、本地摘要与多标签
   → ignore：不保存
   → ask：请求用户确认
 
@@ -184,7 +184,7 @@ Telegram 命令：
 
 保存成功时 Telegram 只显示完整记录 ID 的前 4 位和分类，不重复用户输入。数据库仍保留完整 ID、原文和分析结果。
 
-## 本地分类结果
+## 本地标签与分类结果
 
 Ollama 使用 JSON Schema 返回：
 
@@ -193,23 +193,36 @@ Ollama 使用 JSON Schema 返回：
   "storage_action": "store",
   "confidence": 0.94,
   "reason_code": "personal_event",
-  "category": "work",
+  "primary_tag": "activity",
+  "system_tags": ["activity", "work", "project"],
+  "topic_tags": ["telegram", "daily-agent"],
+  "details": {
+    "project": "Daily Agent"
+  },
   "summary": "完成了 Telegram 接入",
-  "topics": ["telegram"],
   "entities": [],
   "sentiment": "positive",
   "importance": 4
 }
 ```
 
-分类、摘要、主题、情绪和实体均由本地 Qwen 生成。
+一条记录可以有多个标签：
+
+- `primary_tag` 是一个主要记忆类型，取值为 `reflection`、`idea`、`decision`、`plan`、`activity`、`experience`、`fact`、`reminder`、`lesson`、`preference`、`commitment` 或 `question`。
+- `system_tags` 是受控标签，可表达工作、家庭、关系、健康、心情、睡眠、症状、生日、截止日期等多个维度。
+- `topic_tags` 是 Qwen 从内容中提取的开放主题，最多 8 个。
+- `details` 保存日期、对象、项目等结构化细节，为将来的提醒和联系分析准备；它目前不会自动创建定时提醒。
+
+标签、摘要、情绪和实体均由本地 Qwen 生成。它们是便于检索和分析的模型元数据，不应被当作未经核实的事实。
+
+旧数据库会在程序启动时自动增加这些字段，并将旧 `category/topics` 保守映射到新标签。migration 可重复执行，不会覆盖已经迁移或后来更新的标签；旧字段暂时保留用于兼容。
 
 ## 隐私
 
 - SQLite 明文保存被接受日志的原文。
 - 普通输入只发送到 `127.0.0.1` 的 Ollama。
 - 普通输入代码路径不会调用 GLM。
-- `/private` 日志永远不会发送给 GLM。
+- `/private` 日志及其元数据永远不会发送给 GLM。
 - 高级分析优先发送本地摘要，不发送完整历史原文。
 - 调用 GLM 前再次遮盖手机号、邮箱、身份证、银行卡和 IPv4。
 - Telegram 消息仍会经过 Telegram 服务器。

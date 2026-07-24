@@ -174,7 +174,7 @@ async fn handle(
 
 fn add_response(result: &AddResult, config: &Config) -> String {
     let mut status = if result.log.analysis_status == "complete" {
-        config.i18n.category(result.log.category.as_deref())
+        agent::display_tag(&result.log, config)
     } else if result.log.analysis_status == "not_requested" {
         config.i18n.text("telegram.private_saved")
     } else {

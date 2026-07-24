@@ -51,6 +51,18 @@ impl I18n {
             })
             .unwrap_or_else(|| self.text("category.pending"))
     }
+
+    pub fn tag(&self, value: Option<&str>) -> String {
+        value
+            .map(|code| {
+                let key = format!("tag.{code}");
+                self.messages
+                    .get(&key)
+                    .cloned()
+                    .unwrap_or_else(|| code.to_owned())
+            })
+            .unwrap_or_else(|| self.text("category.pending"))
+    }
 }
 
 #[cfg(test)]
@@ -63,6 +75,7 @@ mod tests {
         let en = I18n::load("./resources", "en-US").unwrap();
         assert_eq!(zh.category(Some("work")), "工作");
         assert_eq!(en.category(Some("work")), "Work");
+        assert_eq!(zh.tag(Some("plan")), "计划");
         assert_eq!(
             en.format("terminal.deleted", &[("id", "abc")]),
             "Deleted abc"

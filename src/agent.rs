@@ -122,7 +122,12 @@ pub async fn connections(
     user_id: &str,
     limit: u32,
 ) -> Result<ConnectionAnalysis> {
-    let logs = store.recent_logs(user_id, limit).await?;
+    let logs: Vec<Log> = store
+        .recent_logs(user_id, limit)
+        .await?
+        .into_iter()
+        .filter(|log| log.privacy_level != "no_upload")
+        .collect();
     if logs.len() < 2 {
         return Ok(ConnectionAnalysis {
             overview: config.i18n.text("analysis.need_two_logs"),
@@ -153,7 +158,9 @@ fn log_for_model(log: &Log, config: &Config) -> serde_json::Value {
     serde_json::json!({
         "id": log.id,
         "created_at": log.created_at,
-        "category": log.category,
+        "primary_tag": log.primary_tag,
+        "system_tags": log.system_tags_json,
+        "topic_tags": log.topic_tags_json,
         "summary": log.summary.as_deref().map(|value| privacy::redact(value, &config.i18n)),
         "topics": log.topics_json
     })
@@ -164,9 +171,16 @@ pub fn format_log(log: &Log, config: &Config) -> String {
         "[{}] {} · {}\n{}",
         log.id,
         log.created_at,
-        config.i18n.category(log.category.as_deref()),
+        display_tag(log, config),
         log.summary.as_deref().unwrap_or(&log.text)
     )
+}
+
+pub fn display_tag(log: &Log, config: &Config) -> String {
+    log.primary_tag
+        .as_deref()
+        .map(|tag| config.i18n.tag(Some(tag)))
+        .unwrap_or_else(|| config.i18n.category(log.category.as_deref()))
 }
 
 pub async fn delete_log_reference(
@@ -261,6 +275,10 @@ mod tests {
             confidence: 0.9,
             reason_code: "question".into(),
             analysis: Analysis {
+                primary_tag: "question".into(),
+                system_tags: vec!["question".into()],
+                topic_tags: vec![],
+                details: serde_json::json!({}),
                 category: "other".into(),
                 summary: "question".into(),
                 topics: vec![],
@@ -280,6 +298,10 @@ mod tests {
             confidence: 0.5,
             reason_code: "ambiguous".into(),
             analysis: Analysis {
+                primary_tag: "question".into(),
+                system_tags: vec!["question".into()],
+                topic_tags: vec![],
+                details: serde_json::json!({}),
                 category: "other".into(),
                 summary: "ambiguous".into(),
                 topics: vec![],
@@ -340,6 +362,32 @@ mod tests {
         let result = connections(&store, &config, &user.id, 30).await.unwrap();
         assert_eq!(result.connections.len(), 1);
         handle.await.unwrap();
+
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn connections_never_upload_no_upload_logs() {
+        let (store, path) = store().await;
+        let user = store.ensure_local_user("private-owner").await.unwrap();
+        store
+            .insert_log(&user.id, "terminal", "normal", "normal")
+            .await
+            .unwrap();
+        store
+            .insert_log(&user.id, "terminal", "private", "no_upload")
+            .await
+            .unwrap();
+        let config = test_config(
+            format!("sqlite://{}", path.display()),
+            "http://must-not-be-called".into(),
+            Some("key"),
+        );
+
+        let result = connections(&store, &config, &user.id, 30).await.unwrap();
+        assert!(result.connections.is_empty());
+        assert_eq!(result.overview, config.i18n.text("analysis.need_two_logs"));
 
         drop(store);
         let _ = std::fs::remove_file(path);
