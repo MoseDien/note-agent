@@ -51,6 +51,7 @@ Tests use a local mock HTTP server (`src/test_support.rs`), temp SQLite DBs, and
 - `i18n.rs` / `prompts.rs` — load runtime UI strings and LLM system prompts from `resources/`.
 - `config.rs` — all settings come from environment variables.
 - `models.rs` — shared domain and API types.
+- `commands.rs` — shortest-unique-prefix resolution for slash commands. Both channels expand short prefixes (`/d`→`/delete`) before dispatch; `/link` and `/log` are full-word only.
 
 ### The `x` reversal
 A single ordinary input is reversible for 10 minutes via `x` / `/x`. The decision is held **only in process memory** (`agent::ReversalStore`, keyed by `(internal_user_id, channel)`) — never persisted to SQLite, lost on restart. It is single-use and isolated per user+channel. Explicit `/log`, `/private`, `delete`, and advanced commands are **not** reversible.

@@ -1,5 +1,5 @@
 use crate::{
-    agent,
+    agent, commands,
     config::Config,
     db::Store,
     local_llm::LocalStorageGate,
@@ -56,6 +56,8 @@ async fn handle(
         Some(text) => text.trim(),
         None => return Ok(()),
     };
+    let expanded = commands::expand_telegram(text);
+    let text = expanded.as_str();
     let telegram_id = i64::try_from(msg.from.as_ref().context("missing Telegram user")?.id.0)
         .context("Telegram user id is out of range")?;
 
@@ -362,5 +364,51 @@ mod tests {
         let result = truncate(&long, &config);
         assert!(result.contains("truncated"));
         assert!(result.len() < long.len());
+    }
+
+    #[tokio::test]
+    async fn expands_short_command_prefixes() {
+        let (store, path) = store().await;
+        let local = store.ensure_local_user("owner").await.unwrap();
+        let code = store.create_pairing_code(&local.id).await.unwrap();
+        let responses = (0..6).map(|_| telegram_response()).collect();
+        let (url, server) = mock_server(responses).await;
+        let config = test_config(
+            format!("sqlite://{}", path.display()),
+            "http://unused".into(),
+            None,
+        );
+        let gate = LocalStorageGate::disabled();
+        let reversals = agent::ReversalStore::default();
+        let bot = Bot::new("123:test").set_api_url(Url::parse(&url).unwrap());
+
+        // /link pairs the user; remaining short forms route to their commands,
+        // while ambiguous or full-only prefixes fall through to "unknown command".
+        handle(
+            &bot,
+            &message(&format!("/link {code}"), 42),
+            &store,
+            &config,
+            &gate,
+            &reversals,
+        )
+        .await
+        .unwrap();
+        for command in ["/h", "/r", "/c", "/p", "/lin x"] {
+            handle(
+                &bot,
+                &message(command, 42),
+                &store,
+                &config,
+                &gate,
+                &reversals,
+            )
+            .await
+            .unwrap();
+        }
+
+        assert_eq!(server.await.unwrap().len(), 6);
+        drop(store);
+        let _ = std::fs::remove_file(path);
     }
 }

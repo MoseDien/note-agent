@@ -56,8 +56,11 @@ cargo run -- gateway
 - `src/prompts.rs`: runtime prompt loading
 - `src/models.rs`: shared domain and API types
 - `src/config.rs`: environment-based configuration
+- `src/commands.rs`: shortest-unique-prefix resolution for slash commands, shared by both channels
 
 Terminal and Telegram must call the same agent and storage functions. Do not duplicate storage-decision or memory logic in channel adapters.
+
+Slash commands in both channels accept their shortest unique prefix through `commands::expand_terminal` / `commands::expand_telegram` (for example `/d` means `/delete`). `/link` and `/log` are matched by full name only and must not be abbreviated. When adding a command, register it in `TELEGRAM_COMMANDS` / `TERMINAL_COMMANDS`, or in the `*_FULL_ONLY` set if it must stay full-word only.
 
 The `x` reversal shortcut is single-use, expires after 10 minutes, and is isolated by internal user ID and channel. A rejected input may remain only in process memory during that window; do not persist it merely to support reversal. Explicit `/log`, `/private`, delete, or advanced commands must not create a reversible decision.
 

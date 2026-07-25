@@ -1,5 +1,5 @@
 {
-  "interactive.welcome": "Daily Agent · 普通输入会先在本地判断是否存储；x 推翻上一次判断；/recent 查看记录；/connections 分析联系；/exit 退出",
+  "interactive.welcome": "Daily Agent · 普通输入会先在本地判断是否存储；x 推翻上一次判断；命令支持短前缀（如 /d = /delete）；/recent 查看记录；/connections 分析联系；/exit 退出",
   "override.hint": "10 分钟内输入 x 可推翻这次判断。",
   "override.saved": "已推翻：已记录 [{id}]",
   "override.deleted": "已推翻：记录 [{id}] 已删除",
@@ -14,7 +14,7 @@
   "telegram.linked": "配对成功。现在可以直接发送日志了。",
   "telegram.invalid_pairing": "配对码无效、已过期或已经使用。请在 Terminal 重新生成。",
   "telegram.not_linked": "尚未配对。请先在 Terminal 生成配对码，再发送 `/link 配对码`。",
-  "telegram.help": "普通文字：本地 Qwen 只判断是否保存\nx 或 /x：推翻最近一次普通输入的判断（10 分钟内）\n/log 内容：不经判断，强制保存\n/private 内容：强制保存并禁止发送给 GLM\n/recent：最近记录\n/connections：调用 GLM 分析联系\n/delete ID：按 ID 删除\n/delete -N：删除倒数第 N 条，N 为 1 至 10\n/export：导出 JSON\n/privacy：查看隐私说明",
+  "telegram.help": "普通文字：本地 Qwen 只判断是否保存\nx 或 /x：推翻最近一次普通输入的判断（10 分钟内）\n/log 内容：不经判断，强制保存\n/private 内容：强制保存并禁止发送给 GLM\n/recent：最近记录\n/connections：调用 GLM 分析联系\n/delete ID：按 ID 删除\n/delete -N：删除倒数第 N 条，N 为 1 至 10\n/export：导出 JSON\n/privacy：查看隐私说明\n命令支持最短唯一前缀（如 /d = /delete）；/link 与 /log 需输入完整命令",
   "telegram.no_logs": "还没有记录。",
   "telegram.privacy": "当前版本：SQLite 明文保存原文；普通输入仅发送给本机 Ollama。只有明确使用 /connections 等高级功能时才调用 GLM，发送前会脱敏。Telegram 消息仍会经过 Telegram 服务器，请勿发送密码等高度敏感信息。",
   "telegram.deleted": "记录已删除。",

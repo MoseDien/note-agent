@@ -1,5 +1,5 @@
 {
-  "interactive.welcome": "Daily Agent · Local Qwen decides whether plain input should be stored; x reverses the last decision; /recent to view logs; /connections to analyze links; /exit to quit",
+  "interactive.welcome": "Daily Agent · Local Qwen decides whether plain input should be stored; x reverses the last decision; short prefixes work (/d = /delete); /recent to view logs; /connections to analyze links; /exit to quit",
   "override.hint": "Enter x within 10 minutes to reverse this decision.",
   "override.saved": "Reversed: saved [{id}]",
   "override.deleted": "Reversed: deleted [{id}]",
@@ -14,7 +14,7 @@
   "telegram.linked": "Pairing successful. You can now send logs directly.",
   "telegram.invalid_pairing": "The pairing code is invalid, expired, or already used. Generate a new one in Terminal.",
   "telegram.not_linked": "Not paired yet. Generate a pairing code in Terminal, then send `/link CODE`.",
-  "telegram.help": "Plain text: local Qwen only decides whether to store it\nx or /x: reverse the latest plain-input decision within 10 minutes\n/log TEXT: force save without a model decision\n/private TEXT: force save and prohibit GLM upload\n/recent: recent logs\n/connections: call GLM for advanced connection analysis\n/delete ID: delete by ID\n/delete -N: delete the Nth newest log, N from 1 to 10\n/export: export JSON\n/privacy: privacy information",
+  "telegram.help": "Plain text: local Qwen only decides whether to store it\nx or /x: reverse the latest plain-input decision within 10 minutes\n/log TEXT: force save without a model decision\n/private TEXT: force save and prohibit GLM upload\n/recent: recent logs\n/connections: call GLM for advanced connection analysis\n/delete ID: delete by ID\n/delete -N: delete the Nth newest log, N from 1 to 10\n/export: export JSON\n/privacy: privacy information\nCommands accept the shortest unique prefix (e.g. /d = /delete); /link and /log require the full word",
   "telegram.no_logs": "No logs yet.",
   "telegram.privacy": "Original text is stored in plaintext SQLite. Ordinary input is sent only to local Ollama. GLM is called only by explicit advanced features such as /connections, after local redaction. Telegram messages still pass through Telegram servers. Do not send passwords or other highly sensitive information.",
   "telegram.deleted": "Log deleted.",

@@ -1,4 +1,5 @@
 mod agent;
+mod commands;
 mod config;
 mod db;
 mod glm;
@@ -184,7 +185,9 @@ async fn interactive(
         if std::io::stdin().read_line(&mut input)? == 0 {
             break;
         }
-        let input = input.trim();
+        let trimmed = input.trim();
+        let expanded = commands::expand_terminal(trimmed);
+        let input = expanded.as_str();
         match input {
             "" => continue,
             "/exit" | "/quit" => break,

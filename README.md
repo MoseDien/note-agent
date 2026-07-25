@@ -151,6 +151,8 @@ target/release/daily-agent export --output export.json
 
 `connections` 是暂时保留的实验性高级功能，会调用 GLM；命令设计后续再确定。普通输入、`recent`、`delete` 和 `export` 不调用 GLM。
 
+交互模式下的斜杠命令支持最短唯一前缀：`/d` 表示 `/delete`、`/r` 表示 `/recent`、`/c` 表示 `/connections`、`/e` 表示 `/exit`、`/q` 表示 `/quit`。无歧义时一个字符即可；有歧义时输入到能区分的最短前缀。
+
 ## Telegram
 
 生成一次性配对码：
@@ -188,6 +190,8 @@ x 或 /x        推翻最近一次普通输入的判断（10 分钟内）
 保存成功时 Telegram 只显示完整记录 ID 的前 4 位，不重复用户输入。数据库保留完整 ID 和原文。
 
 `x` 只推翻同一 Telegram 用户最近一次普通输入的判断，不影响 `/log`、`/private` 或其他显式命令。对于未保存的输入，原文仅在 gateway 内存中保留最多 10 分钟以支持推翻，不写入 SQLite；gateway 重启后该临时状态消失。
+
+斜杠命令支持最短唯一前缀：`/d` 表示 `/delete`、`/r` 表示 `/recent`、`/c` 表示 `/connections`、`/e` 表示 `/export`、`/h` 表示 `/help` 等。无歧义时取最短前缀；`/private` 与 `/privacy` 共享前缀，需要输入 `/privat` 或 `/privac` 才能区分。`/link` 与 `/log` 不支持简写，必须输入完整命令。
 
 ## 本地存储判断
 
