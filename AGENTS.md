@@ -59,6 +59,8 @@ cargo run -- gateway
 
 Terminal and Telegram must call the same agent and storage functions. Do not duplicate storage-decision or memory logic in channel adapters.
 
+The `x` reversal shortcut is single-use, expires after 10 minutes, and is isolated by internal user ID and channel. A rejected input may remain only in process memory during that window; do not persist it merely to support reversal. Explicit `/log`, `/private`, delete, or advanced commands must not create a reversible decision.
+
 ## Internationalization
 
 The MVP supports exactly two locales:

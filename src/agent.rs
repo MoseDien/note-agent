@@ -7,6 +7,99 @@ use crate::{
     privacy,
 };
 use anyhow::Result;
+use std::{collections::HashMap, sync::Arc, time::Duration};
+use tokio::sync::Mutex;
+
+#[derive(Clone)]
+pub struct ReversalStore {
+    entries: Arc<Mutex<HashMap<(String, String), ReversibleDecision>>>,
+    ttl: Duration,
+}
+
+#[derive(Clone)]
+enum ReversibleDecision {
+    Stored {
+        log_id: String,
+        recorded_at: std::time::Instant,
+    },
+    NotStored {
+        text: String,
+        recorded_at: std::time::Instant,
+    },
+}
+
+pub enum ReversalOutcome {
+    Stored(AddResult),
+    Deleted { log_id: String },
+    Unavailable,
+}
+
+impl Default for ReversalStore {
+    fn default() -> Self {
+        Self::new(Duration::from_secs(10 * 60))
+    }
+}
+
+impl ReversalStore {
+    pub fn new(ttl: Duration) -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(HashMap::new())),
+            ttl,
+        }
+    }
+
+    pub async fn remember(&self, user_id: &str, channel: &str, text: &str, result: &IngestResult) {
+        let decision = match result {
+            IngestResult::Stored { result } => ReversibleDecision::Stored {
+                log_id: result.log.id.clone(),
+                recorded_at: std::time::Instant::now(),
+            },
+            IngestResult::Ignored | IngestResult::Ask => ReversibleDecision::NotStored {
+                text: text.to_owned(),
+                recorded_at: std::time::Instant::now(),
+            },
+        };
+        self.entries
+            .lock()
+            .await
+            .insert((user_id.to_owned(), channel.to_owned()), decision);
+    }
+
+    async fn take(&self, user_id: &str, channel: &str) -> Option<ReversibleDecision> {
+        let decision = self
+            .entries
+            .lock()
+            .await
+            .remove(&(user_id.to_owned(), channel.to_owned()))?;
+        let recorded_at = match &decision {
+            ReversibleDecision::Stored { recorded_at, .. }
+            | ReversibleDecision::NotStored { recorded_at, .. } => *recorded_at,
+        };
+        (recorded_at.elapsed() <= self.ttl).then_some(decision)
+    }
+}
+
+pub async fn reverse_last_decision(
+    store: &Store,
+    config: &Config,
+    reversals: &ReversalStore,
+    user_id: &str,
+    channel: &str,
+) -> Result<ReversalOutcome> {
+    Ok(match reversals.take(user_id, channel).await {
+        Some(ReversibleDecision::Stored { log_id, .. }) => {
+            if store.delete_log(user_id, &log_id).await? {
+                ReversalOutcome::Deleted { log_id }
+            } else {
+                ReversalOutcome::Unavailable
+            }
+        }
+        Some(ReversibleDecision::NotStored { text, .. }) => ReversalOutcome::Stored(
+            add_log(store, config, user_id, &text, channel, "normal").await?,
+        ),
+        None => ReversalOutcome::Unavailable,
+    })
+}
 
 pub async fn ingest_log(
     store: &Store,
@@ -336,6 +429,83 @@ mod tests {
                 .await
                 .unwrap()
         );
+        drop(store);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn reverses_storage_decisions_once_with_user_and_channel_isolation() {
+        let (store, path) = store().await;
+        let user = store.ensure_local_user("owner").await.unwrap();
+        let other = store.ensure_local_user("other").await.unwrap();
+        let config = test_config(
+            format!("sqlite://{}", path.display()),
+            "http://unused".into(),
+            None,
+        );
+        let reversals = ReversalStore::default();
+
+        reversals
+            .remember(&user.id, "terminal", "keep this", &IngestResult::Ignored)
+            .await;
+        assert!(matches!(
+            reverse_last_decision(&store, &config, &reversals, &other.id, "terminal")
+                .await
+                .unwrap(),
+            ReversalOutcome::Unavailable
+        ));
+        assert!(matches!(
+            reverse_last_decision(&store, &config, &reversals, &user.id, "telegram")
+                .await
+                .unwrap(),
+            ReversalOutcome::Unavailable
+        ));
+        assert!(matches!(
+            reverse_last_decision(&store, &config, &reversals, &user.id, "terminal")
+                .await
+                .unwrap(),
+            ReversalOutcome::Stored(_)
+        ));
+        assert_eq!(store.recent_logs(&user.id, 10).await.unwrap().len(), 1);
+        assert!(matches!(
+            reverse_last_decision(&store, &config, &reversals, &user.id, "terminal")
+                .await
+                .unwrap(),
+            ReversalOutcome::Unavailable
+        ));
+
+        let result = ingest_log(
+            &store,
+            &config,
+            &LocalStorageGate::disabled(),
+            &user.id,
+            "remove this",
+            "terminal",
+        )
+        .await
+        .unwrap();
+        reversals
+            .remember(&user.id, "terminal", "remove this", &result)
+            .await;
+        assert!(matches!(
+            reverse_last_decision(&store, &config, &reversals, &user.id, "terminal")
+                .await
+                .unwrap(),
+            ReversalOutcome::Deleted { .. }
+        ));
+        assert_eq!(store.recent_logs(&user.id, 10).await.unwrap().len(), 1);
+
+        let expired = ReversalStore::new(Duration::ZERO);
+        expired
+            .remember(&user.id, "terminal", "expired", &IngestResult::Ask)
+            .await;
+        assert!(matches!(
+            reverse_last_decision(&store, &config, &expired, &user.id, "terminal")
+                .await
+                .unwrap(),
+            ReversalOutcome::Unavailable
+        ));
+
         drop(store);
         let _ = std::fs::remove_file(path);
     }

@@ -175,6 +175,7 @@ async fn interactive(
     user_id: &str,
 ) -> Result<()> {
     use std::io::Write;
+    let reversals = agent::ReversalStore::default();
     println!("{}", config.i18n.text("interactive.welcome"));
     loop {
         print!("> ");
@@ -187,6 +188,29 @@ async fn interactive(
         match input {
             "" => continue,
             "/exit" | "/quit" => break,
+            "x" | "/x" => {
+                match agent::reverse_last_decision(store, config, &reversals, user_id, "terminal")
+                    .await?
+                {
+                    agent::ReversalOutcome::Stored(result) => {
+                        let short_id: String = result.log.id.chars().take(4).collect();
+                        println!(
+                            "{}",
+                            config.i18n.format("override.saved", &[("id", &short_id)])
+                        );
+                    }
+                    agent::ReversalOutcome::Deleted { log_id } => {
+                        let short_id: String = log_id.chars().take(4).collect();
+                        println!(
+                            "{}",
+                            config.i18n.format("override.deleted", &[("id", &short_id)])
+                        );
+                    }
+                    agent::ReversalOutcome::Unavailable => {
+                        println!("{}", config.i18n.text("override.unavailable"));
+                    }
+                }
+            }
             "/recent" => {
                 for log in store.recent_logs(user_id, 10).await? {
                     println!("{}\n", agent::format_log(&log, config));
@@ -213,13 +237,14 @@ async fn interactive(
                     println!("{}", config.i18n.text("terminal.log_not_found"));
                 }
             }
-            text => println!(
-                "{}",
-                serde_json::to_string_pretty(
-                    &agent::ingest_log(store, config, storage_gate, user_id, text, "terminal")
-                        .await?
-                )?
-            ),
+            text => {
+                let result =
+                    agent::ingest_log(store, config, storage_gate, user_id, text, "terminal")
+                        .await?;
+                reversals.remember(user_id, "terminal", text, &result).await;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+                println!("{}", config.i18n.text("override.hint"));
+            }
         }
     }
     Ok(())

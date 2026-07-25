@@ -16,14 +16,17 @@ pub async fn run(store: Store, config: Config) -> Result<()> {
         .context("missing TELOXIDE_TOKEN")?;
     let bot = Bot::new(token.expose_secret());
     let storage_gate = LocalStorageGate::from_config(&config).await?;
+    let reversals = agent::ReversalStore::default();
     tracing::info!("Telegram gateway started");
 
     teloxide::repl(bot, move |bot: Bot, msg: Message| {
         let store = store.clone();
         let config = config.clone();
         let storage_gate = storage_gate.clone();
+        let reversals = reversals.clone();
         async move {
-            if let Err(error) = handle(&bot, &msg, &store, &config, &storage_gate).await {
+            if let Err(error) = handle(&bot, &msg, &store, &config, &storage_gate, &reversals).await
+            {
                 tracing::warn!(chat_id=%msg.chat.id, error=%error, "Telegram request failed");
                 let error_text = error.to_string();
                 bot.send_message(
@@ -47,6 +50,7 @@ async fn handle(
     store: &Store,
     config: &Config,
     storage_gate: &LocalStorageGate,
+    reversals: &agent::ReversalStore,
 ) -> Result<()> {
     let text = match msg.text() {
         Some(text) => text.trim(),
@@ -85,6 +89,23 @@ async fn handle(
     };
 
     match text {
+        "x" | "/x" => {
+            let response =
+                match agent::reverse_last_decision(store, config, reversals, &user.id, "telegram")
+                    .await?
+                {
+                    agent::ReversalOutcome::Stored(result) => {
+                        let short_id: String = result.log.id.chars().take(4).collect();
+                        config.i18n.format("override.saved", &[("id", &short_id)])
+                    }
+                    agent::ReversalOutcome::Deleted { log_id } => {
+                        let short_id: String = log_id.chars().take(4).collect();
+                        config.i18n.format("override.deleted", &[("id", &short_id)])
+                    }
+                    agent::ReversalOutcome::Unavailable => config.i18n.text("override.unavailable"),
+                };
+            bot.send_message(msg.chat.id, response).await?
+        }
         "/help" => {
             bot.send_message(msg.chat.id, config.i18n.text("telegram.help"))
                 .await?
@@ -145,16 +166,20 @@ async fn handle(
                 let result =
                     agent::add_log(store, config, &user.id, content, "telegram", "no_upload")
                         .await?;
-                add_response(&result, config)
+                add_response(&result, config, false)
             } else if text.starts_with("/log ") {
                 let result =
                     agent::add_log(store, config, &user.id, content, "telegram", "normal").await?;
-                add_response(&result, config)
+                add_response(&result, config, false)
             } else {
-                match agent::ingest_log(store, config, storage_gate, &user.id, content, "telegram")
-                    .await?
-                {
-                    IngestResult::Stored { result, .. } => add_response(&result, config),
+                let result =
+                    agent::ingest_log(store, config, storage_gate, &user.id, content, "telegram")
+                        .await?;
+                reversals
+                    .remember(&user.id, "telegram", content, &result)
+                    .await;
+                match &result {
+                    IngestResult::Stored { result } => add_response(result, config, true),
                     IngestResult::Ignored => config.i18n.text("telegram.storage_ignored"),
                     IngestResult::Ask => config.i18n.text("telegram.storage_ask"),
                 }
@@ -165,9 +190,14 @@ async fn handle(
     Ok(())
 }
 
-fn add_response(result: &AddResult, config: &Config) -> String {
+fn add_response(result: &AddResult, config: &Config, reversible: bool) -> String {
     let short_id: String = result.log.id.chars().take(4).collect();
-    config.i18n.format("telegram.saved", &[("id", &short_id)])
+    let key = if reversible {
+        "telegram.saved"
+    } else {
+        "telegram.saved_forced"
+    };
+    config.i18n.format(key, &[("id", &short_id)])
 }
 
 fn truncate(value: &str, config: &Config) -> String {
@@ -209,7 +239,7 @@ mod tests {
     async fn handles_pairing_commands_private_logs_and_queries() {
         let (store, path) = store().await;
         let local = store.ensure_local_user("owner").await.unwrap();
-        let responses = (0..14).map(|_| telegram_response()).collect();
+        let responses = (0..16).map(|_| telegram_response()).collect();
         let (url, server) = mock_server(responses).await;
         let config = test_config(
             format!("sqlite://{}", path.display()),
@@ -217,17 +247,39 @@ mod tests {
             None,
         );
         let gate = LocalStorageGate::disabled();
+        let reversals = agent::ReversalStore::default();
         let bot = Bot::new("123:test").set_api_url(Url::parse(&url).unwrap());
 
-        handle(&bot, &message("/start", 42), &store, &config, &gate)
-            .await
-            .unwrap();
-        handle(&bot, &message("ordinary log", 42), &store, &config, &gate)
-            .await
-            .unwrap();
-        handle(&bot, &message("/link BAD", 42), &store, &config, &gate)
-            .await
-            .unwrap();
+        handle(
+            &bot,
+            &message("/start", 42),
+            &store,
+            &config,
+            &gate,
+            &reversals,
+        )
+        .await
+        .unwrap();
+        handle(
+            &bot,
+            &message("ordinary log", 42),
+            &store,
+            &config,
+            &gate,
+            &reversals,
+        )
+        .await
+        .unwrap();
+        handle(
+            &bot,
+            &message("/link BAD", 42),
+            &store,
+            &config,
+            &gate,
+            &reversals,
+        )
+        .await
+        .unwrap();
         let code = store.create_pairing_code(&local.id).await.unwrap();
         handle(
             &bot,
@@ -235,13 +287,33 @@ mod tests {
             &store,
             &config,
             &gate,
+            &reversals,
         )
         .await
         .unwrap();
+        for command in ["reversible log", "x"] {
+            handle(
+                &bot,
+                &message(command, 42),
+                &store,
+                &config,
+                &gate,
+                &reversals,
+            )
+            .await
+            .unwrap();
+        }
         for command in ["/help", "/recent", "/privacy", "/unknown"] {
-            handle(&bot, &message(command, 42), &store, &config, &gate)
-                .await
-                .unwrap();
+            handle(
+                &bot,
+                &message(command, 42),
+                &store,
+                &config,
+                &gate,
+                &reversals,
+            )
+            .await
+            .unwrap();
         }
         handle(
             &bot,
@@ -249,13 +321,21 @@ mod tests {
             &store,
             &config,
             &gate,
+            &reversals,
         )
         .await
         .unwrap();
         for command in ["/recent", "/export", "/connections", "/delete missing"] {
-            handle(&bot, &message(command, 42), &store, &config, &gate)
-                .await
-                .unwrap();
+            handle(
+                &bot,
+                &message(command, 42),
+                &store,
+                &config,
+                &gate,
+                &reversals,
+            )
+            .await
+            .unwrap();
         }
         let id = store.recent_logs(&local.id, 1).await.unwrap()[0].id.clone();
         handle(
@@ -264,11 +344,12 @@ mod tests {
             &store,
             &config,
             &gate,
+            &reversals,
         )
         .await
         .unwrap();
 
-        assert_eq!(server.await.unwrap().len(), 14);
+        assert_eq!(server.await.unwrap().len(), 16);
         drop(store);
         let _ = std::fs::remove_file(path);
     }

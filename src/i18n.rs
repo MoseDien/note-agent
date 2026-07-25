@@ -49,7 +49,7 @@ mod tests {
     fn loads_both_supported_languages() {
         let zh = I18n::load("./resources", "zh-CN").unwrap();
         let en = I18n::load("./resources", "en-US").unwrap();
-        assert_eq!(zh.text("telegram.storage_ignored"), "这条输入没有保存。");
+        assert!(zh.text("telegram.storage_ignored").contains("输入 x"));
         assert_eq!(
             en.format("terminal.deleted", &[("id", "abc")]),
             "Deleted abc"

@@ -135,6 +135,8 @@ target/release/daily-agent decide "What is SQLite?"
 target/release/daily-agent
 ```
 
+普通输入完成判断后，10 分钟内输入 `x` 可以推翻最近一次判断：原本保存的记录会被删除，原本未保存的输入会被直接保存。推翻只生效一次，且只影响当前 Terminal 会话。
+
 其他命令：
 
 ```bash
@@ -173,6 +175,7 @@ Telegram 命令：
 
 ```text
 普通文字       本地 Qwen 只判断是否保存
+x 或 /x        推翻最近一次普通输入的判断（10 分钟内）
 /log 内容      不经模型判断，强制保存
 /private 内容  强制保存，不调用模型
 /connections   调用 GLM 进行高级联系分析
@@ -183,6 +186,8 @@ Telegram 命令：
 ```
 
 保存成功时 Telegram 只显示完整记录 ID 的前 4 位，不重复用户输入。数据库保留完整 ID 和原文。
+
+`x` 只推翻同一 Telegram 用户最近一次普通输入的判断，不影响 `/log`、`/private` 或其他显式命令。对于未保存的输入，原文仅在 gateway 内存中保留最多 10 分钟以支持推翻，不写入 SQLite；gateway 重启后该临时状态消失。
 
 ## 本地存储判断
 
