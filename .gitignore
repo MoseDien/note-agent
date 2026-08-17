@@ -17,7 +17,12 @@ target/
 .fastembed_cache/
 .DS_Store
 .env
+data/*/
 data/*.json
 data/*.db
 data/*.db-*
 !data/.gitkeep
+
+# Local launchd service setup (machine-specific paths + wrapper; kept local)
+scripts/run-gateway.sh
+scripts/com.belldien.daily-agent.plist

@@ -22,7 +22,7 @@
   "telegram.unknown_command": "Unknown command. Send /help for help.",
   "telegram.storage_ignored": "This input was not stored. Enter x within 10 minutes to save it.",
   "telegram.storage_ask": "I could not determine whether to store this input. Enter x within 10 minutes to save it.",
-  "telegram.saved": "Saved [{id}]. Enter x within 10 minutes to undo.",
+  "telegram.saved": "Received [{id}]",
   "telegram.saved_forced": "Saved [{id}].",
   "telegram.truncated": "…Output was too long and has been truncated",
   "analysis.need_two_logs": "At least two logs are required to analyze connections.",
@@ -33,5 +33,7 @@
   "pii.phone": "[PHONE]",
   "pii.id_card": "[ID_NUMBER]",
   "pii.bank_card": "[BANK_CARD]",
-  "pii.ip": "[IP_ADDRESS]"
+  "pii.ip": "[IP_ADDRESS]",
+  "telegram.helo": "Bot is online and connected.",
+  "telegram.media_unsupported": "Unsupported media type."
 }

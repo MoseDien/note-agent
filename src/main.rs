@@ -5,6 +5,7 @@ mod db;
 mod glm;
 mod i18n;
 mod local_llm;
+mod media;
 mod models;
 mod privacy;
 mod prompts;
@@ -82,6 +83,9 @@ impl PrivacyArg {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load local development configuration when running from the project root.
+    // Existing environment variables take precedence, as handled by dotenvy.
+    let _ = dotenvy::dotenv();
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .without_time()

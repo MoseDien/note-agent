@@ -28,6 +28,7 @@ enum ReversibleDecision {
     },
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum ReversalOutcome {
     Stored(AddResult),
     Deleted { log_id: String },

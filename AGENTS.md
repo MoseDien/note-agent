@@ -1,5 +1,7 @@
 # Daily Agent Development Guide
 
+> 文档状态说明：`docs/` 描述下一阶段 Telegram-only capture 目标；本文件中的 Qwen/GLM 规则属于旧版实现，目标设计确认前不要继续扩展旧模型流程。
+
 ## Project overview
 
 Daily Agent is a Rust personal-journal agent with two input channels:

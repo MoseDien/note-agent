@@ -24,7 +24,7 @@ impl Store {
         for sql in [
             "CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, local_name TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL)",
             "CREATE TABLE IF NOT EXISTS channel_identities (user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, channel TEXT NOT NULL, external_id TEXT NOT NULL, UNIQUE(channel, external_id))",
-            "CREATE TABLE IF NOT EXISTS logs (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, channel TEXT NOT NULL, text TEXT NOT NULL, privacy_level TEXT NOT NULL DEFAULT 'normal', created_at TEXT NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS logs (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, channel TEXT NOT NULL, text TEXT NOT NULL, content_type TEXT NOT NULL DEFAULT 'text', media_path TEXT, mime_type TEXT, file_size INTEGER, telegram_message_id INTEGER, timestamp TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z', privacy_level TEXT NOT NULL DEFAULT 'normal', created_at TEXT NOT NULL)",
             "CREATE INDEX IF NOT EXISTS logs_user_created ON logs(user_id, created_at DESC)",
             "CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(log_id UNINDEXED, user_id UNINDEXED, text, summary, topics)",
             "CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL, name TEXT NOT NULL, UNIQUE(user_id, kind, name))",
@@ -35,6 +35,28 @@ impl Store {
         ] {
             sqlx::query(sql).execute(&self.pool).await?;
         }
+        for (name, definition) in [
+            ("content_type", "TEXT NOT NULL DEFAULT 'text'"),
+            ("media_path", "TEXT"),
+            ("mime_type", "TEXT"),
+            ("file_size", "INTEGER"),
+            ("telegram_message_id", "INTEGER"),
+            ("timestamp", "TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z'"),
+        ] {
+            let exists: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info('logs') WHERE name=?")
+                    .bind(name)
+                    .fetch_one(&self.pool)
+                    .await?;
+            if exists == 0 {
+                sqlx::query(&format!("ALTER TABLE logs ADD COLUMN {name} {definition}"))
+                    .execute(&self.pool)
+                    .await?;
+            }
+        }
+        sqlx::query("UPDATE logs SET timestamp=created_at WHERE timestamp='1970-01-01T00:00:00Z'")
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
@@ -72,12 +94,18 @@ impl Store {
             user_id: user_id.into(),
             channel: channel.into(),
             text: text.into(),
+            content_type: "text".into(),
+            media_path: None,
+            mime_type: None,
+            file_size: None,
+            telegram_message_id: None,
+            timestamp: Utc::now().to_rfc3339(),
             privacy_level: privacy_level.into(),
             created_at: Utc::now().to_rfc3339(),
         };
         let mut tx = self.pool.begin().await?;
-        sqlx::query("INSERT INTO logs(id,user_id,channel,text,privacy_level,created_at) VALUES(?,?,?,?,?,?)")
-            .bind(&log.id).bind(user_id).bind(channel).bind(text).bind(&log.privacy_level).bind(&log.created_at).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO logs(id,user_id,channel,text,content_type,timestamp,privacy_level,created_at) VALUES(?,?,?,?,?,?,?,?)")
+            .bind(&log.id).bind(user_id).bind(channel).bind(text).bind(&log.content_type).bind(&log.timestamp).bind(&log.privacy_level).bind(&log.created_at).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO logs_fts(log_id,user_id,text,summary,topics) VALUES(?,?,?,'','')")
             .bind(&log.id)
             .bind(user_id)
@@ -88,6 +116,58 @@ impl Store {
         Ok(log)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::collapsible_if)]
+    pub async fn insert_message(
+        &self,
+        user_id: &str,
+        channel: &str,
+        message_id: Option<i64>,
+        content_type: &str,
+        text: &str,
+        media_path: Option<&str>,
+        mime_type: Option<&str>,
+        file_size: Option<i64>,
+        timestamp: String,
+        privacy_level: &str,
+    ) -> Result<Log> {
+        if let Some(message_id) = message_id {
+            if let Some(existing) = sqlx::query_as::<_, Log>(
+                "SELECT * FROM logs WHERE user_id=? AND telegram_message_id=?",
+            )
+            .bind(user_id)
+            .bind(message_id)
+            .fetch_optional(&self.pool)
+            .await?
+            {
+                return Ok(existing);
+            }
+        }
+        let log = Log {
+            id: Uuid::new_v4().to_string(),
+            user_id: user_id.into(),
+            channel: channel.into(),
+            text: text.into(),
+            content_type: content_type.into(),
+            media_path: media_path.map(str::to_owned),
+            mime_type: mime_type.map(str::to_owned),
+            file_size,
+            telegram_message_id: message_id,
+            timestamp,
+            privacy_level: privacy_level.into(),
+            created_at: Utc::now().to_rfc3339(),
+        };
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("INSERT INTO logs(id,user_id,channel,text,content_type,media_path,mime_type,file_size,telegram_message_id,timestamp,privacy_level,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)").bind(&log.id).bind(user_id).bind(channel).bind(text).bind(&log.content_type).bind(&log.media_path).bind(&log.mime_type).bind(log.file_size).bind(log.telegram_message_id).bind(&log.timestamp).bind(&log.privacy_level).bind(&log.created_at).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO logs_fts(log_id,user_id,text,summary,topics) VALUES(?,?,?,'','')")
+            .bind(&log.id)
+            .bind(user_id)
+            .bind(text)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(log)
+    }
     #[cfg_attr(not(test), allow(dead_code))]
     pub async fn get_log(&self, id: &str) -> Result<Log> {
         Ok(sqlx::query_as("SELECT * FROM logs WHERE id=?")
@@ -148,6 +228,13 @@ impl Store {
     }
 
     pub async fn delete_log(&self, user_id: &str, id: &str) -> Result<bool> {
+        let media_path: Option<String> =
+            sqlx::query_scalar("SELECT media_path FROM logs WHERE id=? AND user_id=?")
+                .bind(id)
+                .bind(user_id)
+                .fetch_optional(&self.pool)
+                .await?
+                .flatten();
         let mut tx = self.pool.begin().await?;
         sqlx::query("DELETE FROM logs_fts WHERE log_id=? AND user_id=?")
             .bind(id)
@@ -161,6 +248,11 @@ impl Store {
             .await?;
         sqlx::query("DELETE FROM connections WHERE user_id=? AND id NOT IN (SELECT connection_id FROM connection_sources)").bind(user_id).execute(&mut *tx).await?;
         tx.commit().await?;
+        if result.rows_affected() == 1
+            && let Some(path) = media_path
+        {
+            let _ = tokio::fs::remove_file(path).await;
+        }
         Ok(result.rows_affected() == 1)
     }
 

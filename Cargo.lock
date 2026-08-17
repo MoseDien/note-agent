@@ -389,6 +389,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "clap",
+ "dotenvy",
  "regex",
  "reqwest",
  "secrecy",

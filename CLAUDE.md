@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+> 迁移说明：当前文件描述旧版 Qwen/GLM Rust MVP。下一阶段的产品边界、需求和清理计划以 `docs/` 为准；先完成文档确认，再修改业务代码。
+
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 `AGENTS.md` is the authoritative development guide (commands, conventions, invariants). `SOUL.md` defines the product character and behavioral boundaries. `README.md` is the user/install guide. Read those; this file captures the architecture and the invariants that are easy to break.

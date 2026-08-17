@@ -13,6 +13,12 @@ pub struct Log {
     pub user_id: String,
     pub channel: String,
     pub text: String,
+    pub content_type: String,
+    pub media_path: Option<String>,
+    pub mime_type: Option<String>,
+    pub file_size: Option<i64>,
+    pub telegram_message_id: Option<i64>,
+    pub timestamp: String,
     pub privacy_level: String,
     pub created_at: String,
 }

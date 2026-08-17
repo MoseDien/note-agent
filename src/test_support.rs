@@ -10,6 +10,7 @@ use tokio::{
 pub fn config(database_url: String, base_url: String, api_key: Option<&str>) -> Config {
     Config {
         database_url,
+        media_root: std::path::PathBuf::from("./data/test-media"),
         local_user: "test".into(),
         glm_api_key: api_key.map(|value| SecretString::from(value.to_owned())),
         glm_base_url: base_url.clone(),
@@ -55,17 +56,4 @@ pub async fn mock_server(responses: Vec<String>) -> (String, tokio::task::JoinHa
 
 pub fn glm_response(content: &str) -> String {
     serde_json::json!({"choices":[{"message":{"content":content}}]}).to_string()
-}
-
-pub fn telegram_response() -> String {
-    serde_json::json!({
-        "ok": true,
-        "result": {
-            "message_id": 2,
-            "date": 0,
-            "chat": {"id": 123, "type": "private"},
-            "text": "ok"
-        }
-    })
-    .to_string()
 }
