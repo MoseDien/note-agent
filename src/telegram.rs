@@ -1,4 +1,4 @@
-use crate::{agent, commands, config::Config, db::Store, media};
+use crate::{agent, categories, commands, config::Config, db::Store, glm::GlmClient, media};
 use anyhow::{Context, Result};
 use secrecy::ExposeSecret;
 use std::path::Path;
@@ -83,6 +83,27 @@ async fn handle(
     };
 
     match text {
+        "/classify" | "classify" => {
+            let client = GlmClient::from_config(config)?;
+            let logs = store.unclassified_logs(&user.id, 100_000).await?;
+            let mut classified = 0usize;
+            for batch in logs.chunks(1000) {
+                let input = serde_json::to_string(
+                    &batch
+                        .iter()
+                        .map(|log| serde_json::json!({"log_id": log.id, "text": log.text}))
+                        .collect::<Vec<_>>(),
+                )?;
+                for assignment in client.classify(&input).await? {
+                    store
+                        .assign_categories(&user.id, &assignment.log_id, &assignment.categories)
+                        .await?;
+                    classified += 1;
+                }
+            }
+            bot.send_message(msg.chat.id, format!("classified {classified} logs"))
+                .await?
+        }
         "/help" => {
             bot.send_message(msg.chat.id, config.i18n.text("telegram.help"))
                 .await?
@@ -125,6 +146,27 @@ async fn handle(
                 config.i18n.text("telegram.not_found")
             };
             bot.send_message(msg.chat.id, message).await?
+        }
+        _ if text.starts_with("show ") || text.starts_with("/show ") => {
+            let category = text
+                .split_once(' ')
+                .map(|(_, value)| value.trim())
+                .unwrap_or("");
+            anyhow::ensure!(
+                categories::is_valid(category),
+                "unknown category: {category}"
+            );
+            let logs = store.recent_by_category(&user.id, category, 20).await?;
+            let output = if logs.is_empty() {
+                "no matching logs".to_owned()
+            } else {
+                logs.iter()
+                    .map(|log| agent::format_log(log, config))
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
+            };
+            bot.send_message(msg.chat.id, truncate(&output, config))
+                .await?
         }
         _ if text.starts_with('/')
             && !text.starts_with("/log ")

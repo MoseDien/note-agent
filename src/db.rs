@@ -27,6 +27,8 @@ impl Store {
             "CREATE TABLE IF NOT EXISTS logs (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, channel TEXT NOT NULL, text TEXT NOT NULL, content_type TEXT NOT NULL DEFAULT 'text', media_path TEXT, mime_type TEXT, file_size INTEGER, telegram_message_id INTEGER, timestamp TEXT NOT NULL DEFAULT '1970-01-01T00:00:00Z', privacy_level TEXT NOT NULL DEFAULT 'normal', created_at TEXT NOT NULL)",
             "CREATE INDEX IF NOT EXISTS logs_user_created ON logs(user_id, created_at DESC)",
             "CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(log_id UNINDEXED, user_id UNINDEXED, text, summary, topics)",
+            "CREATE TABLE IF NOT EXISTS log_categories (log_id TEXT NOT NULL REFERENCES logs(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, category TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(log_id, category))",
+            "CREATE INDEX IF NOT EXISTS log_categories_lookup ON log_categories(user_id, category, created_at DESC)",
             "CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL, name TEXT NOT NULL, UNIQUE(user_id, kind, name))",
             "CREATE TABLE IF NOT EXISTS entity_mentions (entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE, log_id TEXT NOT NULL REFERENCES logs(id) ON DELETE CASCADE, UNIQUE(entity_id, log_id))",
             "CREATE TABLE IF NOT EXISTS connections (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT NOT NULL, description TEXT NOT NULL, confidence REAL NOT NULL, created_at TEXT NOT NULL)",
@@ -183,6 +185,34 @@ impl Store {
                 .fetch_all(&self.pool)
                 .await?,
         )
+    }
+
+    pub async fn unclassified_logs(&self, user_id: &str, limit: u32) -> Result<Vec<Log>> {
+        Ok(sqlx::query_as("SELECT l.* FROM logs l WHERE l.user_id=? AND NOT EXISTS (SELECT 1 FROM log_categories c WHERE c.log_id=l.id) ORDER BY l.timestamp ASC LIMIT ?")
+            .bind(user_id).bind(limit).fetch_all(&self.pool).await?)
+    }
+
+    pub async fn assign_categories(
+        &self,
+        user_id: &str,
+        log_id: &str,
+        categories: &[String],
+    ) -> Result<()> {
+        for category in categories {
+            sqlx::query("INSERT OR IGNORE INTO log_categories(log_id,user_id,category,created_at) VALUES(?,?,?,?)")
+                .bind(log_id).bind(user_id).bind(category).bind(Utc::now().to_rfc3339()).execute(&self.pool).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn recent_by_category(
+        &self,
+        user_id: &str,
+        category: &str,
+        limit: u32,
+    ) -> Result<Vec<Log>> {
+        Ok(sqlx::query_as("SELECT l.* FROM logs l JOIN log_categories c ON c.log_id=l.id WHERE l.user_id=? AND c.category=? ORDER BY l.timestamp DESC LIMIT ?")
+            .bind(user_id).bind(category).bind(limit).fetch_all(&self.pool).await?)
     }
     pub async fn export_user(&self, user_id: &str) -> Result<Vec<Log>> {
         self.recent_logs(user_id, 100_000).await

@@ -1,3 +1,4 @@
+use crate::models::{CategoryAssignment, ClassificationResponse};
 use crate::{config::Config, models::ConnectionAnalysis, prompts::PromptStore};
 use anyhow::{Context, Result};
 use reqwest::Client;
@@ -108,6 +109,22 @@ impl GlmClient {
             .contains(&connection.kind.as_str())
         });
         Ok(analysis)
+    }
+
+    pub async fn classify(&self, input: &str) -> Result<Vec<CategoryAssignment>> {
+        let response: ClassificationResponse =
+            self.json(&crate::categories::prompt(), input).await?;
+        let mut result: Vec<CategoryAssignment> = response.assignments;
+        for item in &mut result {
+            item.categories
+                .retain(|category| crate::categories::is_valid(category));
+            item.categories.sort();
+            item.categories.dedup();
+            if item.categories.is_empty() {
+                item.categories.push("other".into());
+            }
+        }
+        Ok(result)
     }
 }
 

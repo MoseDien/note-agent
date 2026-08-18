@@ -10,7 +10,7 @@
 Telegram → Gateway → 解析消息 → SQLite + 本地媒体 → 收到 [hashId]
 ```
 
-第一阶段不调用 Qwen、Embedding 或 Remote LLM，不自动分类、打标签、总结、转录、识别或分析内容。Remote LLM 未来只能由用户手动命令触发，不做定时任务。
+记录阶段不调用 Qwen 或 Embedding。用户执行 `classify` 时，GLM 会批量处理尚未分类的记录；`show <category>` 可查看最近 20 条分类记录。分类名称固定为英文。
 
 ## 文档
 

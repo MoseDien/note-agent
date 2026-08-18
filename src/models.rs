@@ -24,6 +24,17 @@ pub struct Log {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CategoryAssignment {
+    pub log_id: String,
+    pub categories: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ClassificationResponse {
+    pub assignments: Vec<CategoryAssignment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionAnalysis {
     pub overview: String,
     #[serde(default)]

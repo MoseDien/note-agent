@@ -1,4 +1,5 @@
 mod agent;
+mod categories;
 mod commands;
 mod config;
 mod db;
@@ -64,6 +65,10 @@ enum Command {
     LinkTelegram,
     /// Start the Telegram long-polling gateway.
     Gateway,
+    /// Classify all currently unclassified logs with GLM.
+    Classify,
+    /// Show the latest logs for an English category name.
+    Show { category: String },
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -167,6 +172,35 @@ async fn main() -> Result<()> {
                 "{}",
                 config.i18n.format("terminal.link", &[("code", &code)])
             );
+        }
+        Some(Command::Classify) => {
+            let client = glm::GlmClient::from_config(&config)?;
+            let logs = store.unclassified_logs(&user.id, 100_000).await?;
+            let mut classified = 0usize;
+            for batch in logs.chunks(1000) {
+                let input = serde_json::to_string(
+                    &batch
+                        .iter()
+                        .map(|log| serde_json::json!({"log_id": log.id, "text": log.text}))
+                        .collect::<Vec<_>>(),
+                )?;
+                for assignment in client.classify(&input).await? {
+                    store
+                        .assign_categories(&user.id, &assignment.log_id, &assignment.categories)
+                        .await?;
+                    classified += 1;
+                }
+            }
+            println!("classified {classified} logs");
+        }
+        Some(Command::Show { category }) => {
+            anyhow::ensure!(
+                categories::is_valid(&category),
+                "unknown category: {category}"
+            );
+            for log in store.recent_by_category(&user.id, &category, 20).await? {
+                println!("{}\n", agent::format_log(&log, &config));
+            }
         }
         Some(Command::Gateway) => unreachable!(),
     }
