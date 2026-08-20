@@ -11,6 +11,9 @@
 pub const TELEGRAM_COMMANDS: &[&str] = &[
     "start",
     "help",
+    "helo",
+    "classify",
+    "show",
     "recent",
     "connections",
     "export",
@@ -82,6 +85,24 @@ pub fn expand(input: &str, eligible: &[&str], full_only: &[&str]) -> String {
 
 /// Expands Telegram short-command prefixes to their full forms.
 pub fn expand_telegram(input: &str) -> String {
+    let (token, rest) = split_command(input);
+    let alias = match token {
+        "/h" => Some("helo"),
+        "/c" => Some("classify"),
+        "/s" => Some("show"),
+        "/r" => Some("recent"),
+        "/d" => Some("delete"),
+        "/e" => Some("export"),
+        "/a" => Some("categories"),
+        _ => None,
+    };
+    if let Some(command) = alias {
+        return if rest.is_empty() {
+            format!("/{command}")
+        } else {
+            format!("/{command} {rest}")
+        };
+    }
     expand(input, TELEGRAM_COMMANDS, TELEGRAM_FULL_ONLY)
 }
 
@@ -99,15 +120,12 @@ mod tests {
         for (short, full) in [
             ("/d", "delete"),
             ("/r", "recent"),
-            ("/c", "connections"),
+            ("/c", "classify"),
             ("/e", "export"),
-            ("/h", "help"),
-            ("/s", "start"),
+            ("/h", "helo"),
+            ("/s", "show"),
         ] {
-            assert_eq!(
-                resolve(short, TELEGRAM_COMMANDS, TELEGRAM_FULL_ONLY),
-                Some(full)
-            );
+            assert_eq!(expand_telegram(short), format!("/{full}"));
         }
     }
 

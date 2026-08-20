@@ -43,13 +43,13 @@ async fn handle(
     media_root: &Path,
 ) -> Result<()> {
     let text = msg.text().or_else(|| msg.caption()).unwrap_or("").trim();
+    let expanded = commands::expand_telegram(text);
+    let text = expanded.as_str();
     if text == "helo" || text == "/helo" {
         bot.send_message(msg.chat.id, config.i18n.text("telegram.helo"))
             .await?;
         return Ok(());
     }
-    let expanded = commands::expand_telegram(text);
-    let text = expanded.as_str();
     let telegram_id = i64::try_from(msg.from.as_ref().context("missing Telegram user")?.id.0)
         .context("Telegram user id is out of range")?;
 
@@ -83,6 +83,14 @@ async fn handle(
     };
 
     match text {
+        "/categories" => {
+            let output = categories::CATEGORIES
+                .iter()
+                .map(|(name, description)| format!("{name}: {description}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            bot.send_message(msg.chat.id, output).await?
+        }
         "/classify" | "classify" => {
             let client = GlmClient::from_config(config)?;
             let logs = store.unclassified_logs(&user.id, 100_000).await?;
@@ -206,7 +214,7 @@ async fn handle(
                     "normal",
                 )
                 .await?;
-            let short_id: String = log.id.chars().take(8).collect();
+            let short_id: String = log.id.chars().take(4).collect();
             bot.send_message(
                 msg.chat.id,
                 config.i18n.format("telegram.saved", &[("id", &short_id)]),
